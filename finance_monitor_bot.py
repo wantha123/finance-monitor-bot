@@ -513,10 +513,10 @@ class FinanceMonitor:
             self.send_slack_notification(full_message)
     
     def get_daily_summary(self) -> Dict:
-        """Get daily summary of prices and changes"""
+        """Get daily summary of prices and changes for all assets"""
         summary = {
-            'ovh_data': None,
-            'sol_data': None,
+            'stock_data': {},
+            'crypto_data': {},
             'market_status': [],
             'daily_changes': {}
         }
@@ -530,9 +530,20 @@ class FinanceMonitor:
         
         summary['market_status'].append("🟢 Crypto Markets: ALWAYS OPEN")
         
-        # Get current prices
-        summary['ovh_data'] = self.get_ovh_price()
-        summary['sol_data'] = self.get_solana_price()
+        # Get current prices for all stocks
+        stock_symbols = self.config.get('stocks', {})
+        for symbol, stock_config in stock_symbols.items():
+            data = self.get_stock_price(symbol)
+            if data:
+                summary['stock_data'][symbol] = data
+        
+        # Get current prices for all crypto
+        crypto_symbols = self.config.get('crypto', {})
+        for symbol, crypto_config in crypto_symbols.items():
+            if symbol == 'SOL':
+                data = self.get_solana_price()
+                if data:
+                    summary['crypto_data'][symbol] = data
         
         # Get daily changes from database
         conn = sqlite3.connect(self.db_path)
@@ -541,7 +552,9 @@ class FinanceMonitor:
         # Get prices from 24 hours ago
         yesterday = datetime.now() - timedelta(days=1)
         
-        for symbol in ['OVH.PA', 'SOL']:
+        # Check all tracked symbols
+        all_symbols = list(stock_symbols.keys()) + list(crypto_symbols.keys())
+        for symbol in all_symbols:
             cursor.execute('''
                 SELECT price FROM price_history 
                 WHERE symbol = ? AND timestamp >= ? 
@@ -551,18 +564,19 @@ class FinanceMonitor:
             result = cursor.fetchone()
             if result:
                 old_price = result[0]
-                if symbol == 'OVH.PA' and summary['ovh_data']:
-                    current_price = summary['ovh_data']['current_price']
+                current_price = None
+                
+                # Get current price
+                if symbol in summary['stock_data']:
+                    current_price = summary['stock_data'][symbol]['current_price']
+                elif symbol in summary['crypto_data']:
+                    current_price = summary['crypto_data'][symbol]['current_price_eur']
+                
+                if current_price:
                     change = ((current_price - old_price) / old_price) * 100
-                    summary['daily_changes']['OVH'] = {
-                        'old_price': old_price,
-                        'current_price': current_price,
-                        'change_percent': change
-                    }
-                elif symbol == 'SOL' and summary['sol_data']:
-                    current_price = summary['sol_data']['current_price_eur']
-                    change = ((current_price - old_price) / old_price) * 100
-                    summary['daily_changes']['SOL'] = {
+                    asset_name = stock_symbols.get(symbol, crypto_symbols.get(symbol, {})).get('name', symbol)
+                    summary['daily_changes'][symbol] = {
+                        'name': asset_name,
                         'old_price': old_price,
                         'current_price': current_price,
                         'change_percent': change
@@ -599,40 +613,87 @@ class FinanceMonitor:
         
         # Current prices
         message += "💰 CURRENT PRICES:\n"
-        if summary['ovh_data']:
-            message += f"  🏢 OVH (OVH.PA): €{summary['ovh_data']['current_price']:.2f}\n"
-        else:
-            message += "  🏢 OVH (OVH.PA): Market closed - no current price\n"
         
-        if summary['sol_data']:
-            message += f"  🪙 Solana (SOL): €{summary['sol_data']['current_price_eur']:.2f} [${summary['sol_data']['current_price_usd']:.2f} USD]\n"
+        # Show top performing and worst performing assets
+        all_assets = []
+        
+        # Add stocks
+        for symbol, data in summary['stock_data'].items():
+            stock_config = self.config['stocks'][symbol]
+            all_assets.append({
+                'name': stock_config['name'],
+                'symbol': symbol,
+                'price': data['current_price'],
+                'change': data['change_percent'],
+                'type': '🏢'
+            })
+        
+        # Add crypto
+        for symbol, data in summary['crypto_data'].items():
+            crypto_config = self.config['crypto'][symbol]
+            all_assets.append({
+                'name': crypto_config['name'],
+                'symbol': symbol,
+                'price': data['current_price_eur'],
+                'change': data['change_percent_24h'],
+                'type': '🪙'
+            })
+        
+        # Sort by change percentage (best to worst)
+        all_assets.sort(key=lambda x: x['change'], reverse=True)
+        
+        # Show top 5 performers and bottom 5
+        message += "  📈 TOP PERFORMERS:\n"
+        for asset in all_assets[:5]:
+            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
+        
+        if len(all_assets) > 5:
+            message += "  📉 WORST PERFORMERS:\n"
+            for asset in all_assets[-3:]:
+                message += f"    {asset['type']} {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
+        
         message += "\n"
         
         # Daily changes (if available)
         if summary['daily_changes']:
             message += "📈 24-HOUR CHANGES:\n"
-            for symbol, change_data in summary['daily_changes'].items():
+            
+            # Sort by absolute change percentage
+            changes_sorted = sorted(summary['daily_changes'].items(), 
+                                  key=lambda x: abs(x[1]['change_percent']), reverse=True)
+            
+            for symbol, change_data in changes_sorted[:10]:  # Show top 10 changes
                 direction = "📈" if change_data['change_percent'] > 0 else "📉" if change_data['change_percent'] < 0 else "➡️"
-                message += f"  {direction} {symbol}: {change_data['change_percent']:+.2f}% "
+                message += f"  {direction} {change_data['name']}: {change_data['change_percent']:+.2f}% "
                 message += f"(€{change_data['old_price']:.2f} → €{change_data['current_price']:.2f})\n"
             message += "\n"
         
-        # Recent news
-        ovh_news = self.get_news("OVH cloud OR OVHcloud")
+        # Recent news - focus on top assets
+        priority_assets = ['OVH.PA', 'STMPA.PA', 'STLAP.PA']  # Most important assets
+        news_found = False
+        
+        for symbol in priority_assets:
+            if symbol in self.config.get('stocks', {}):
+                stock_config = self.config['stocks'][symbol]
+                news_items = self.get_news(f"{stock_config['name']} stock")
+                if news_items:
+                    if not news_found:
+                        message += "📰 PORTFOLIO NEWS (Last 24h):\n"
+                        news_found = True
+                    for news in news_items[:1]:  # Limit to 1 article per major stock
+                        message += f"  • {stock_config['name']}: {news.title}\n"
+                        message += f"    {news.source} | {news.url}\n"
+        
+        # Add Solana news
         sol_news = self.get_news("Solana cryptocurrency OR SOL crypto")
-        
-        if ovh_news:
-            message += "📰 OVH NEWS (Last 24h):\n"
-            for news in ovh_news[:2]:  # Limit to 2 articles for email
-                message += f"  • {news.title}\n"
-                message += f"    {news.source} | {news.url}\n"
-            message += "\n"
-        
         if sol_news:
-            message += "📰 SOLANA NEWS (Last 24h):\n"
-            for news in sol_news[:2]:  # Limit to 2 articles for email
-                message += f"  • {news.title}\n"
+            if not news_found:
+                message += "📰 PORTFOLIO NEWS (Last 24h):\n"
+            for news in sol_news[:1]:  # Limit to 1 article
+                message += f"  • Solana: {news.title}\n"
                 message += f"    {news.source} | {news.url}\n"
+        
+        if news_found:
             message += "\n"
         
         # Footer
@@ -653,11 +714,13 @@ class FinanceMonitor:
         logger.info(f"{report_type.capitalize()} daily report sent")
     
     def monitor_assets(self):
-        """Main monitoring function with smart API usage"""
-        logger.info("Starting asset monitoring cycle...")
+        """Main monitoring function for multiple assets"""
+        logger.info("Starting comprehensive asset monitoring cycle...")
         
         alerts = []
         market_status = []
+        stock_data = {}
+        crypto_data = {}
         
         # Check market status
         if self.is_euronext_open():
@@ -668,53 +731,90 @@ class FinanceMonitor:
         
         market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
         
-        # Monitor OVH
-        ovh_data = self.get_ovh_price()
-        if ovh_data:
-            self.store_price_data('OVH.PA', ovh_data['current_price'], 'stock')
-            
-            ovh_thresholds = self.config['thresholds']['OVH']
-            ovh_alerts = self.check_price_alerts('OVH', ovh_data['current_price'], ovh_thresholds)
-            alerts.extend(ovh_alerts)
-            
-            logger.info(f"OVH: €{ovh_data['current_price']:.2f} ({ovh_data['change_percent']:+.2f}%)")
-        elif not self.is_euronext_open():
-            logger.info("OVH monitoring skipped - market closed")
+        # Monitor all stocks from configuration
+        stock_symbols = self.config.get('stocks', {})
+        logger.info(f"Monitoring {len(stock_symbols)} stocks...")
         
-        # Monitor Solana
-        sol_data = self.get_solana_price()
-        if sol_data:
-            # Store EUR price in database
-            self.store_price_data('SOL', sol_data['current_price_eur'], 'crypto')
-            
-            sol_thresholds = self.config['thresholds']['SOL']
-            sol_alerts = self.check_price_alerts('SOL', sol_data['current_price_eur'], sol_thresholds)
-            alerts.extend(sol_alerts)
-            
-            logger.info(f"SOL: €{sol_data['current_price_eur']:.2f} ({sol_data['change_percent_24h']:+.2f}%) [Rate: {sol_data['exchange_rate_used']:.4f}]")
+        for symbol, stock_config in stock_symbols.items():
+            try:
+                data = self.get_stock_price(symbol)
+                if data:
+                    # Store price data
+                    self.store_price_data(symbol, data['current_price'], 'stock')
+                    
+                    # Check alerts
+                    thresholds = stock_config.get('thresholds', {})
+                    stock_alerts = self.check_price_alerts(symbol, data['current_price'], thresholds)
+                    alerts.extend(stock_alerts)
+                    
+                    # Store for reporting
+                    stock_data[symbol] = data
+                    
+                    logger.info(f"{stock_config['name']} ({symbol}): €{data['current_price']:.2f} ({data['change_percent']:+.2f}%)")
+                elif symbol.endswith('.PA') and not self.is_euronext_open():
+                    logger.info(f"{stock_config['name']} ({symbol}): Market closed")
+                else:
+                    logger.warning(f"Failed to get data for {symbol}")
+                    
+            except Exception as e:
+                logger.error(f"Error monitoring {symbol}: {e}")
+                continue
         
-        # Get news - but only during market hours or every hour to save API calls
+        # Monitor cryptocurrencies
+        crypto_symbols = self.config.get('crypto', {})
+        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies...")
+        
+        for symbol, crypto_config in crypto_symbols.items():
+            try:
+                if symbol == 'SOL':
+                    data = self.get_solana_price()
+                    if data:
+                        # Store EUR price in database
+                        self.store_price_data(symbol, data['current_price_eur'], 'crypto')
+                        
+                        thresholds = crypto_config.get('thresholds', {})
+                        crypto_alerts = self.check_price_alerts(symbol, data['current_price_eur'], thresholds)
+                        alerts.extend(crypto_alerts)
+                        
+                        # Store for reporting
+                        crypto_data[symbol] = data
+                        
+                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.2f} ({data['change_percent_24h']:+.2f}%) [Rate: {data['exchange_rate_used']:.4f}]")
+                
+            except Exception as e:
+                logger.error(f"Error monitoring {symbol}: {e}")
+                continue
+        
+        # Get news - highly optimized for 37 stocks
         current_minute = datetime.now().minute
         should_check_news = (
-            self.is_euronext_open() or  # Always check during market hours
-            current_minute == 0  # Or once per hour when market closed
+            self.is_euronext_open() and current_minute == 0  # Only once per hour during market hours
         )
         
-        ovh_news = []
-        sol_news = []
-        
+        news_items = []
         if should_check_news:
-            logger.info("Checking news (within API limits)...")
-            ovh_news = self.get_news("OVH cloud OR OVHcloud")
-            sol_news = self.get_news("Solana cryptocurrency OR SOL crypto")
+            logger.info("Checking news for priority assets (API optimized)...")
+            # Only check news for top 5 most important assets to save API calls
+            priority_stocks = ['OVH.PA', 'STMPA.PA', 'STLAP.PA', 'MT.PA', 'ENGI.PA']
+            for symbol in priority_stocks:
+                if symbol in stock_data:
+                    stock_config = stock_symbols[symbol]
+                    try:
+                        news_query = f"{stock_config['name']} stock"
+                        symbol_news = self.get_news(news_query)
+                        if symbol_news:
+                            news_items.extend(symbol_news[:1])  # Max 1 news per stock
+                    except Exception as e:
+                        logger.warning(f"News fetch failed for {symbol}: {e}")
+                        continue
         else:
-            logger.info("Skipping news check to preserve API limits")
+            logger.info("Skipping news check (preserving API limits for 37-stock portfolio)")
         
-        # Send notifications if alerts exist or if it's a regular update
-        if alerts or ovh_news or sol_news or ovh_data or sol_data:
-            subject = f"Financial Monitor Report - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        # Send notifications if there are alerts
+        if alerts:
+            subject = f"🚨 Portfolio Alert - {len(alerts)} notifications from {len(stock_symbols)} stocks"
             
-            message = "=== FINANCIAL MONITORING REPORT ===\n\n"
+            message = "=== 37-STOCK PORTFOLIO MONITORING ALERT ===\n\n"
             
             # Market status
             message += "📊 MARKET STATUS:\n"
@@ -722,38 +822,111 @@ class FinanceMonitor:
                 message += f"  {status}\n"
             message += "\n"
             
-            if alerts:
-                message += "🚨 PRICE ALERTS:\n"
-                for alert in alerts:
-                    message += f"  {alert}\n"
-                message += "\n"
-            
-            if ovh_data:
-                message += f"📊 OVH (OVH.PA): €{ovh_data['current_price']:.2f} ({ovh_data['change_percent']:+.2f}%)\n"
-            
-            if sol_data:
-                message += f"📊 Solana (SOL): €{sol_data['current_price_eur']:.2f} ({sol_data['change_percent_24h']:+.2f}%) [${sol_data['current_price_usd']:.2f} USD]\n"
-            
+            # Price alerts
+            message += f"🚨 PRICE ALERTS ({len(alerts)}):\n"
+            for alert in alerts:
+                message += f"  {alert}\n"
             message += "\n"
             
-            if ovh_news:
-                message += "📰 OVH NEWS:\n"
-                for news in ovh_news[:3]:  # Limit to 3 articles
-                    message += f"  • {news.title} ({news.source})\n    {news.url}\n"
+            # Portfolio performance summary
+            if stock_data or crypto_data:
+                message += "📈 PORTFOLIO PERFORMANCE:\n"
+                
+                # Combine and sort by absolute change
+                all_assets = []
+                for symbol, data in stock_data.items():
+                    all_assets.append((symbol, data, stock_symbols[symbol]['name'], 'stock'))
+                for symbol, data in crypto_data.items():
+                    all_assets.append((symbol, data, crypto_symbols[symbol]['name'], 'crypto'))
+                
+                # Sort by absolute change percentage
+                all_assets.sort(key=lambda x: abs(x[1].get('change_percent', x[1].get('change_percent_24h', 0))), reverse=True)
+                
+                # Show top 3 gainers and top 3 losers
+                message += "  🔥 TOP GAINERS:\n"
+                gainers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) > 0)][:3]
+                for symbol, data, name, type_asset in gainers:
+                    change = data.get('change_percent', data.get('change_percent_24h', 0))
+                    if type_asset == 'crypto':
+                        price = data['current_price_eur']
+                    else:
+                        price = data['current_price']
+                    message += f"    📈 {name}: €{price:.2f} (+{change:.1f}%)\n"
+                
+                message += "  🩸 TOP LOSERS:\n"
+                losers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) < 0)][:3]
+                for symbol, data, name, type_asset in losers:
+                    change = data.get('change_percent', data.get('change_percent_24h', 0))
+                    if type_asset == 'crypto':
+                        price = data['current_price_eur']
+                    else:
+                        price = data['current_price']
+                    message += f"    📉 {name}: €{price:.2f} ({change:.1f}%)\n"
                 message += "\n"
             
-            if sol_news:
-                message += "📰 SOLANA NEWS:\n"
-                for news in sol_news[:3]:  # Limit to 3 articles
-                    message += f"  • {news.title} ({news.source})\n    {news.url}\n"
+            # News (if any)
+            if news_items:
+                message += "📰 PRIORITY NEWS:\n"
+                for news in news_items[:3]:  # Max 3 news items
+                    message += f"  • {news.title} ({news.source})\n"
+                message += "\n"
             
-            # Only send Slack alert if there are actual alerts or significant news
-            if alerts or (ovh_news and len(ovh_news) > 0) or (sol_news and len(sol_news) > 0):
-                self.send_notification(subject, message, notification_type="alert")
+            message += f"📊 Portfolio: {len(stock_data)} stocks active + {len(crypto_data)} crypto\n"
+            message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
+            
+            self.send_notification(subject, message, notification_type="alert")
         
-        logger.info("Monitoring cycle completed")
+        # Summary logging
+        total_monitored = len([d for d in stock_data.values() if d]) + len([d for d in crypto_data.values() if d])
+        total_errors = len(stock_symbols) + len(crypto_symbols) - total_monitored
+        logger.info(f"📊 Monitoring cycle completed:")
+        logger.info(f"   ✅ {total_monitored} assets successfully monitored")
+        logger.info(f"   ⚠️ {total_errors} assets failed/skipped") 
+        logger.info(f"   🚨 {len(alerts)} alerts generated")
+        logger.info(f"   📰 {len(news_items)} news items collected")
 
 def main():
+    # Complete 37-stock French portfolio configuration
+    default_stocks = {
+        "OVH.PA": {"name": "OVH Groupe SAS", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 5.0}},
+        "STMPA.PA": {"name": "STMicroelectronics", "thresholds": {"high": 35.0, "low": 15.0, "change_percent": 8.0}},
+        "STLAP.PA": {"name": "Stellantis", "thresholds": {"high": 20.0, "low": 8.0, "change_percent": 10.0}},
+        "ATO.PA": {"name": "Atos", "thresholds": {"high": 5.0, "low": 0.5, "change_percent": 15.0}},
+        "MT.PA": {"name": "ArcelorMittal", "thresholds": {"high": 30.0, "low": 15.0, "change_percent": 8.0}},
+        "ENGI.PA": {"name": "Engie", "thresholds": {"high": 18.0, "low": 10.0, "change_percent": 6.0}},
+        "EN.PA": {"name": "Bouygues", "thresholds": {"high": 40.0, "low": 25.0, "change_percent": 6.0}},
+        "CA.PA": {"name": "Carrefour", "thresholds": {"high": 18.0, "low": 12.0, "change_percent": 6.0}},
+        "UBI.PA": {"name": "Ubisoft", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}},
+        "PARRO.PA": {"name": "Parrot", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
+        "ALCJ.PA": {"name": "CROSSJECT", "thresholds": {"high": 2.0, "low": 0.1, "change_percent": 20.0}},
+        "ALEUP.PA": {"name": "Europlasma", "thresholds": {"high": 1.0, "low": 0.05, "change_percent": 25.0}},
+        "ALDRV.PA": {"name": "Drone Volt SA", "thresholds": {"high": 0.5, "low": 0.05, "change_percent": 20.0}},
+        "ALLDL.PA": {"name": "Groupe LDLC", "thresholds": {"high": 60.0, "low": 30.0, "change_percent": 10.0}},
+        "ALHRS.PA": {"name": "Hydrogen Refueling Solutions", "thresholds": {"high": 10.0, "low": 1.0, "change_percent": 20.0}},
+        "ALDLT.PA": {"name": "Delta Drone SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 20.0}},
+        "ALLHY.PA": {"name": "Lhyfe SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
+        "ALCAR.PA": {"name": "Carmat", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
+        "KOF.PA": {"name": "Kaufman & Broad", "thresholds": {"high": 35.0, "low": 20.0, "change_percent": 8.0}},
+        "ETL.PA": {"name": "Eutelsat Communications", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 8.0}},
+        "ELI.PA": {"name": "Elior Group", "thresholds": {"high": 8.0, "low": 3.0, "change_percent": 12.0}},
+        "ALCRB.PA": {"name": "Carbios", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
+        "OEN.PA": {"name": "Œneo", "thresholds": {"high": 12.0, "low": 6.0, "change_percent": 10.0}},
+        "ALDNE.PA": {"name": "DON'T NOD", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
+        "PLX.PA": {"name": "Pluxee NV", "thresholds": {"high": 35.0, "low": 20.0, "change_percent": 8.0}},
+        "ALWAL.PA": {"name": "Wallix Group SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
+        "CRI.PA": {"name": "Chargeurs", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
+        "ALDEZ.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 15.0}},
+        "VLA.PA": {"name": "Valneva SE", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
+        "ALVNP.PA": {"name": "Vinpai SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 25.0}},
+        "AVARV.PA": {"name": "Arverne Group", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "FDJ.PA": {"name": "FDJ United", "thresholds": {"high": 50.0, "low": 30.0, "change_percent": 8.0}},
+        "ALMOS.PA": {"name": "Osmosun SA", "thresholds": {"high": 2.0, "low": 0.2, "change_percent": 25.0}},
+        "ALNFL.PA": {"name": "NFL Biosciences SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 25.0}},
+        "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "ALCRSI.PA": {"name": "2CRSi", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
+        "EO.PA": {"name": "Forvia", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}}
+    }
+    
     # Configuration - use environment variables for production
     config = {
         'news_api_key': os.getenv('NEWS_API_KEY', 'cc793418193f491d9184ad7b00785f37'),
@@ -769,16 +942,15 @@ def main():
             'to_email': os.getenv('EMAIL_TO', 'robin.langeard@gmail.com'),
             'password': os.getenv('EMAIL_PASSWORD', 'YOUR_GMAIL_APP_PASSWORD')
         },
-        'thresholds': {
-            'OVH': {
-                'high': float(os.getenv('OVH_HIGH', '20.0')),
-                'low': float(os.getenv('OVH_LOW', '10.0')),
-                'change_percent': float(os.getenv('OVH_CHANGE', '5.0'))
-            },
+        'stocks': default_stocks,
+        'crypto': {
             'SOL': {
-                'high': float(os.getenv('SOL_HIGH', '180.0')),
-                'low': float(os.getenv('SOL_LOW', '90.0')),
-                'change_percent': float(os.getenv('SOL_CHANGE', '10.0'))
+                'name': 'Solana',
+                'thresholds': {
+                    'high': float(os.getenv('SOL_HIGH', '180.0')),
+                    'low': float(os.getenv('SOL_LOW', '90.0')),
+                    'change_percent': float(os.getenv('SOL_CHANGE', '10.0'))
+                }
             }
         }
     }
@@ -789,7 +961,7 @@ def main():
     run_mode = os.getenv('RUN_MODE', 'continuous')
     
     if run_mode == 'continuous':
-        # Schedule monitoring every 20 minutes (optimized)
+        # Schedule monitoring every 20 minutes (optimized for 37 stocks)
         schedule.every(20).minutes.do(monitor.monitor_assets)
         
         # Schedule daily email reports (Paris timezone)
@@ -797,9 +969,10 @@ def main():
         schedule.every().day.at("18:00").do(lambda: monitor.send_daily_report("evening"))
         
         logger.info("🚀 Financial Monitor Bot started in CONTINUOUS mode")
-        logger.info("📊 Monitoring OVH.PA and SOL every 20 minutes (optimized)")
+        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks and {len(config['crypto'])} cryptocurrencies every 20 minutes")
         logger.info("📱 Slack alerts for urgent notifications")
         logger.info("📧 Daily email reports at 10:00 and 18:00 Paris time")
+        logger.info("🏢 Complete French portfolio: OVH, STMicroelectronics, Stellantis, Atos, ArcelorMittal, Engie, Bouygues, Carrefour, Ubisoft + 28 more stocks")
         
         # Run once immediately
         monitor.monitor_assets()
