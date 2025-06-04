@@ -255,43 +255,65 @@ class FinanceMonitor:
     
     def get_solana_price(self) -> Optional[Dict]:
         """Get Solana price from CoinGecko API (free) - converted to EUR"""
-        try:
-            url = "https://api.coingecko.com/api/v3/simple/price"
-            params = {
-                'ids': 'solana',
-                'vs_currencies': 'usd,eur',
-                'include_24hr_change': 'true',
-                'include_24hr_vol': 'true'
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            sol_data = data.get('solana', {})
-            
-            # Get EUR price directly or convert from USD
-            price_eur = sol_data.get('eur')
-            if price_eur is None and sol_data.get('usd'):
-                price_eur = self.usd_to_eur(sol_data.get('usd'))
-            
-            # Convert volume to EUR if needed
-            volume_usd = sol_data.get('usd_24h_vol')
-            volume_eur = self.usd_to_eur(volume_usd) if volume_usd else None
-            
-            return {
-                'symbol': 'SOL',
-                'current_price_eur': price_eur,
-                'current_price_usd': sol_data.get('usd'),  # Keep USD for reference
-                'change_percent_24h': sol_data.get('usd_24h_change'),
-                'volume_24h_eur': volume_eur,
-                'timestamp': datetime.now().isoformat(),
-                'market_open': True,  # Crypto markets are always open
-                'exchange_rate_used': self.get_usd_to_eur_rate()
-            }
-        except Exception as e:
-            logger.error(f"Error fetching Solana price: {e}")
-            return None
+        max_retries = 3
+        retry_delay = 5  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                url = "https://api.coingecko.com/api/v3/simple/price"
+                params = {
+                    'ids': 'solana',
+                    'vs_currencies': 'usd,eur',
+                    'include_24hr_change': 'true',
+                    'include_24hr_vol': 'true'
+                }
+                
+                response = requests.get(url, params=params, timeout=10)
+                
+                if response.status_code == 429:  # Rate limited
+                    logger.warning(f"Rate limited by CoinGecko, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:  # Don't sleep on last attempt
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        logger.error("Max retries reached for CoinGecko API")
+                        return None
+                
+                response.raise_for_status()
+                data = response.json()
+                
+                sol_data = data.get('solana', {})
+                
+                # Get EUR price directly or convert from USD
+                price_eur = sol_data.get('eur')
+                if price_eur is None and sol_data.get('usd'):
+                    price_eur = self.usd_to_eur(sol_data.get('usd'))
+                
+                # Convert volume to EUR if needed
+                volume_usd = sol_data.get('usd_24h_vol')
+                volume_eur = self.usd_to_eur(volume_usd) if volume_usd else None
+                
+                return {
+                    'symbol': 'SOL',
+                    'current_price_eur': price_eur,
+                    'current_price_usd': sol_data.get('usd'),  # Keep USD for reference
+                    'change_percent_24h': sol_data.get('usd_24h_change'),
+                    'volume_24h_eur': volume_eur,
+                    'timestamp': datetime.now().isoformat(),
+                    'market_open': True,  # Crypto markets are always open
+                    'exchange_rate_used': self.get_usd_to_eur_rate()
+                }
+                
+            except Exception as e:
+                logger.error(f"Error fetching Solana price (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    return None
+        
+        return None
     
     def check_price_alerts(self, symbol: str, current_price: float, thresholds: Dict) -> List[str]:
         """Check if price alerts should be triggered"""
