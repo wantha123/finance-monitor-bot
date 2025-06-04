@@ -253,6 +253,39 @@ class FinanceMonitor:
             logger.error(f"Error fetching OVH price: {e}")
             return None
     
+    def get_stock_price(self, symbol: str) -> Optional[Dict]:
+        """Generic function to get stock price from Yahoo Finance"""
+        # Check if market is open for European stocks
+        if symbol.endswith('.PA') and not self.is_euronext_open():
+            next_open = self.get_next_market_open()
+            logger.info(f"Euronext Paris is closed. Next market open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}")
+            return None
+            
+        try:
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="1d", interval="1m")
+            
+            if hist.empty:
+                logger.warning(f"No data found for {symbol}")
+                return None
+                
+            current_price = hist['Close'].iloc[-1]
+            prev_close = ticker.info.get('previousClose', current_price)
+            change_percent = ((current_price - prev_close) / prev_close) * 100
+            
+            return {
+                'symbol': symbol,
+                'current_price': float(current_price),
+                'previous_close': float(prev_close),
+                'change_percent': float(change_percent),
+                'volume': int(hist['Volume'].iloc[-1]) if not hist['Volume'].empty else 0,
+                'timestamp': datetime.now().isoformat(),
+                'market_open': True
+            }
+        except Exception as e:
+            logger.error(f"Error fetching {symbol} price: {e}")
+            return None
+
     def get_solana_price(self) -> Optional[Dict]:
         """Get Solana price from CoinGecko API (free) - converted to EUR"""
         max_retries = 3
