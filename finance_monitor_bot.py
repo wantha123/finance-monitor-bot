@@ -368,6 +368,40 @@ class FinanceMonitor:
         conn.commit()
         conn.close()
     
+    def has_sent_report_today(self, report_type: str, today_date) -> bool:
+        """Check if we've already sent a report today"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Check if we sent this type of report today
+            cursor.execute('''
+                SELECT COUNT(*) FROM alerts_sent 
+                WHERE alert_type = ? AND DATE(timestamp) = ?
+            ''', (f'daily_report_{report_type}', today_date.isoformat()))
+            
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            return count > 0
+        except Exception as e:
+            logger.error(f"Error checking report history: {e}")
+            return False
+    
+    def record_report_sent(self, report_type: str):
+        """Record that we sent a report"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO alerts_sent (symbol, alert_type, message)
+                VALUES (?, ?, ?)
+            ''', ('SYSTEM', f'daily_report_{report_type}', f'{report_type} report sent'))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error recording report: {e}")
+    
     def send_email_notification(self, subject: str, message: str):
         """Send email notification"""
         try:
@@ -456,71 +490,7 @@ class FinanceMonitor:
             # Alerts go to Slack
             self.send_slack_notification(full_message)
     
-    def should_run_now(self) -> Dict[str, bool]:
-        """Determine what actions should run based on current time"""
-        paris_now = datetime.now(self.paris_tz)
-        current_hour = paris_now.hour
-        current_minute = paris_now.minute
-        
-        # Check if we've already run certain tasks today
-        today = paris_now.date()
-        
-        actions = {
-            'monitor': False,
-            'morning_report': False,
-            'evening_report': False
-        }
-        
-        # Always monitor (this is our main task)
-        actions['monitor'] = True
-        
-        # Check for morning report (10:00 AM, only once per day)
-        if current_hour == 10 and 0 <= current_minute <= 59:
-            # Check if we already sent morning report today
-            if not self.has_sent_report_today('morning', today):
-                actions['morning_report'] = True
-        
-        # Check for evening report (6:00 PM, only once per day)
-        elif current_hour == 18 and 0 <= current_minute <= 59:
-            # Check if we already sent evening report today
-            if not self.has_sent_report_today('evening', today):
-                actions['evening_report'] = True
-        
-        return actions
-    
-    def has_sent_report_today(self, report_type: str, today_date) -> bool:
-        """Check if we've already sent a report today"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Check if we sent this type of report today
-            cursor.execute('''
-                SELECT COUNT(*) FROM alerts_sent 
-                WHERE alert_type = ? AND DATE(timestamp) = ?
-            ''', (f'daily_report_{report_type}', today_date.isoformat()))
-            
-            count = cursor.fetchone()[0]
-            conn.close()
-            
-            return count > 0
-        except Exception as e:
-            logger.error(f"Error checking report history: {e}")
-            return False
-    
-    def record_report_sent(self, report_type: str):
-        """Record that we sent a report"""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO alerts_sent (symbol, alert_type, message)
-                VALUES (?, ?, ?)
-            ''', ('SYSTEM', f'daily_report_{report_type}', f'{report_type} report sent'))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Error recording report: {e}")
+    def get_daily_summary(self) -> Dict:
         """Get daily summary of prices and changes"""
         summary = {
             'ovh_data': None,
@@ -659,7 +629,9 @@ class FinanceMonitor:
         self.record_report_sent(report_type)
         
         logger.info(f"{report_type.capitalize()} daily report sent")
-        """Main monitoring function"""
+    
+    def monitor_assets(self):
+        """Main monitoring function with smart API usage"""
         logger.info("Starting asset monitoring cycle...")
         
         alerts = []
@@ -699,9 +671,22 @@ class FinanceMonitor:
             
             logger.info(f"SOL: €{sol_data['current_price_eur']:.2f} ({sol_data['change_percent_24h']:+.2f}%) [Rate: {sol_data['exchange_rate_used']:.4f}]")
         
-        # Get news
-        ovh_news = self.get_news("OVH cloud OR OVHcloud")
-        sol_news = self.get_news("Solana cryptocurrency OR SOL crypto")
+        # Get news - but only during market hours or every hour to save API calls
+        current_minute = datetime.now().minute
+        should_check_news = (
+            self.is_euronext_open() or  # Always check during market hours
+            current_minute == 0  # Or once per hour when market closed
+        )
+        
+        ovh_news = []
+        sol_news = []
+        
+        if should_check_news:
+            logger.info("Checking news (within API limits)...")
+            ovh_news = self.get_news("OVH cloud OR OVHcloud")
+            sol_news = self.get_news("Solana cryptocurrency OR SOL crypto")
+        else:
+            logger.info("Skipping news check to preserve API limits")
         
         # Send notifications if alerts exist or if it's a regular update
         if alerts or ovh_news or sol_news or ovh_data or sol_data:
