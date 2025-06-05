@@ -1032,8 +1032,8 @@ def main():
         "UBI.PA": {"name": "Ubisoft", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}},
         "ALDNE.PA": {"name": "DON'T NOD", "thresholds": {"high": 30.0, "low": 10.0, "change_percent": 15.0}},
         "ALLDL.PA": {"name": "Groupe LDLC", "thresholds": {"high": 60.0, "low": 30.0, "change_percent": 10.0}},
-        "ALWLX.PA": {"name": "Wallix Group SA", "thresholds": {"high": 20.0, "low": 5.0, "change_percent": 15.0}},
-        "ALDEE.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "ALLIX.PA": {"name": "Wallix Group SA", "thresholds": {"high": 20.0, "low": 5.0, "change_percent": 15.0}},
+        "DEEZR.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
         "AL2SI.PA": {"name": "2CRSi", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
         
         # Green Energy & Environment
@@ -1044,7 +1044,7 @@ def main():
         "ALLHY.PA": {"name": "Lhyfe SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
         "ALCRB.PA": {"name": "Carbios", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
         "ARVEN.PA": {"name": "Arverne Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
-        "ALOPH.PA": {"name": "Osmosun SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "ALWTR.PA": {"name": "Osmosun SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
         
         # Healthcare & Biotech
         "ALCAR.PA": {"name": "Carmat", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
@@ -1065,11 +1065,11 @@ def main():
         "KOF.PA": {"name": "Kaufman & Broad", "thresholds": {"high": 40.0, "low": 20.0, "change_percent": 10.0}},
         "ETL.PA": {"name": "Eutelsat Communications", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
         "ELIOR.PA": {"name": "Elior Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
-        "ONEO.PA": {"name": "Œneo", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 10.0}},
+        "SBT.PA": {"name": "Œneo", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 10.0}},
         "PLX.PA": {"name": "Pluxee NV", "thresholds": {"high": 30.0, "low": 20.0, "change_percent": 8.0}},
         "CRI.PA": {"name": "Chargeurs", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
-        "VINP.PA": {"name": "Vinpai SA", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
-        "FDJ.PA": {"name": "FDJ United", "thresholds": {"high": 40.0, "low": 30.0, "change_percent": 8.0}},
+        "ALVIN.PA": {"name": "Vinpai SA", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
+        "FDJ.PA": {"name": "FDJ (La Française des Jeux)", "thresholds": {"high": 40.0, "low": 30.0, "change_percent": 8.0}},
         "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}}
     }
     
