@@ -2,6 +2,7 @@
 """
 Financial & Crypto Monitoring Bot
 Monitors OVH stock and Solana cryptocurrency with news alerts
+Updated to use Google Finance for stock data
 """
 
 import requests
@@ -15,11 +16,12 @@ import sqlite3
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
-import yfinance as yf
 from newsapi import NewsApiClient
 import schedule
 import pytz
 import os
+from bs4 import BeautifulSoup
+import re
 
 # Create log directory - works on Railway, Render, local, etc.
 if os.path.exists('/app'):  # Railway/Docker environment
@@ -76,6 +78,16 @@ class FinanceMonitor:
         # Exchange rate cache (updated every hour)
         self.usd_to_eur_rate = None
         self.last_rate_update = None
+        
+        # Google Finance user agent to avoid blocking
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
+        }
         
         # 2025 Euronext Paris holidays (market closed)
         self.market_holidays_2025 = [
@@ -219,71 +231,103 @@ class FinanceMonitor:
             
             return next_day
     
-    def get_ovh_price(self) -> Optional[Dict]:
-        """Get OVH stock price from Yahoo Finance - only during market hours"""
-        # Check if market is open
-        if not self.is_euronext_open():
-            next_open = self.get_next_market_open()
-            logger.info(f"Euronext Paris is closed. Next market open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}")
-            return None
-            
+    def parse_google_finance_price(self, html_content: str) -> Optional[Dict]:
+        """Parse stock price data from Google Finance HTML"""
         try:
-            # OVH is listed on Euronext Paris as OVH.PA
-            ticker = yf.Ticker("OVH.PA")
-            hist = ticker.history(period="1d", interval="1m")
+            soup = BeautifulSoup(html_content, 'html.parser')
             
-            if hist.empty:
-                logger.warning("No data found for OVH.PA")
+            # Find price - Google Finance uses specific class names
+            price_elem = soup.find('div', class_='YMlKec fxKbKc')
+            if not price_elem:
+                # Try alternative selector
+                price_elem = soup.find('div', attrs={'data-last-price': True})
+            
+            if not price_elem:
+                logger.warning("Could not find price element in Google Finance HTML")
                 return None
-                
-            current_price = hist['Close'].iloc[-1]
-            prev_close = ticker.info.get('previousClose', current_price)
-            change_percent = ((current_price - prev_close) / prev_close) * 100
+            
+            # Extract price
+            price_text = price_elem.text.strip()
+            # Remove currency symbols and convert to float
+            price_text = re.sub(r'[€$,]', '', price_text)
+            current_price = float(price_text)
+            
+            # Find price change
+            change_elem = soup.find('div', class_='JwB6zf')
+            if not change_elem:
+                # Try to find percentage in parentheses
+                change_elem = soup.find('span', class_='NydbP')
+            
+            change_percent = 0.0
+            if change_elem:
+                change_text = change_elem.text.strip()
+                # Extract percentage from text like "(+1.23%)" or "-1.23%"
+                match = re.search(r'[+-]?\d+\.?\d*%', change_text)
+                if match:
+                    change_percent = float(match.group().replace('%', ''))
+            
+            # Find previous close
+            prev_close_elem = soup.find('div', string=re.compile('Previous close'))
+            prev_close = current_price  # Default to current if not found
+            if prev_close_elem:
+                prev_value = prev_close_elem.find_next_sibling()
+                if prev_value:
+                    prev_text = re.sub(r'[€$,]', '', prev_value.text.strip())
+                    try:
+                        prev_close = float(prev_text)
+                    except:
+                        pass
+            
+            # Calculate change if not found
+            if change_percent == 0.0 and prev_close != current_price:
+                change_percent = ((current_price - prev_close) / prev_close) * 100
             
             return {
-                'symbol': 'OVH.PA',
-                'current_price': float(current_price),
-                'previous_close': float(prev_close),
-                'change_percent': float(change_percent),
-                'volume': int(hist['Volume'].iloc[-1]),
-                'timestamp': datetime.now().isoformat(),
-                'market_open': True
+                'current_price': current_price,
+                'previous_close': prev_close,
+                'change_percent': change_percent,
+                'timestamp': datetime.now().isoformat()
             }
+            
         except Exception as e:
-            logger.error(f"Error fetching OVH price: {e}")
+            logger.error(f"Error parsing Google Finance HTML: {e}")
             return None
     
-    def get_stock_price(self, symbol: str) -> Optional[Dict]:
-        """Generic function to get stock price from Yahoo Finance"""
+    def get_stock_price_google(self, symbol: str) -> Optional[Dict]:
+        """Get stock price from Google Finance"""
         # Check if market is open for European stocks
         if symbol.endswith('.PA') and not self.is_euronext_open():
             next_open = self.get_next_market_open()
             logger.info(f"Euronext Paris is closed. Next market open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}")
             return None
-            
+        
         try:
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d", interval="1m")
+            # Convert symbol format for Google Finance
+            # Remove .PA suffix and use exchange prefix
+            google_symbol = symbol.replace('.PA', '')
             
-            if hist.empty:
-                logger.warning(f"No data found for {symbol}")
+            # Google Finance URL
+            url = f"https://www.google.com/finance/quote/{google_symbol}:EPA"
+            
+            # Add delay to avoid rate limiting
+            time.sleep(0.5)
+            
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            
+            # Parse the HTML
+            price_data = self.parse_google_finance_price(response.text)
+            
+            if price_data:
+                price_data['symbol'] = symbol
+                price_data['market_open'] = True
+                return price_data
+            else:
+                logger.warning(f"Could not parse data for {symbol} from Google Finance")
                 return None
                 
-            current_price = hist['Close'].iloc[-1]
-            prev_close = ticker.info.get('previousClose', current_price)
-            change_percent = ((current_price - prev_close) / prev_close) * 100
-            
-            return {
-                'symbol': symbol,
-                'current_price': float(current_price),
-                'previous_close': float(prev_close),
-                'change_percent': float(change_percent),
-                'volume': int(hist['Volume'].iloc[-1]) if not hist['Volume'].empty else 0,
-                'timestamp': datetime.now().isoformat(),
-                'market_open': True
-            }
         except Exception as e:
-            logger.error(f"Error fetching {symbol} price: {e}")
+            logger.error(f"Error fetching {symbol} from Google Finance: {e}")
             return None
 
     def get_solana_price(self) -> Optional[Dict]:
@@ -457,6 +501,33 @@ class FinanceMonitor:
         except Exception as e:
             logger.error(f"Error recording report: {e}")
     
+    def test_email_configuration(self):
+        """Test email configuration by sending a test message"""
+        try:
+            subject = "🧪 Financial Monitor - Email Test"
+            message = """This is a test email from your Financial Monitor Bot.
+
+If you receive this message, your email configuration is working correctly!
+
+✅ SMTP Server: Connected
+✅ Authentication: Successful  
+✅ Email Delivery: Working
+
+Your morning reports will be sent around 10:00 AM Paris time.
+Your evening reports will be sent around 6:00 PM Paris time.
+
+---
+Financial Monitor Bot (Google Finance Edition)
+"""
+            
+            self.send_email_notification(subject, message)
+            logger.info("📧 Test email sent successfully!")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Email test failed: {e}")
+            return False
+    
     def send_email_notification(self, subject: str, message: str):
         """Send email notification"""
         try:
@@ -566,7 +637,7 @@ class FinanceMonitor:
         # Get current prices for all stocks
         stock_symbols = self.config.get('stocks', {})
         for symbol, stock_config in stock_symbols.items():
-            data = self.get_stock_price(symbol)
+            data = self.get_stock_price_google(symbol)
             if data:
                 summary['stock_data'][symbol] = data
         
@@ -731,11 +802,11 @@ class FinanceMonitor:
         
         # Footer
         message += "=" * 50 + "\n"
-        message += "🤖 Automated Financial Monitor | Next report: "
+        message += "🤖 Automated Financial Monitor (Google Finance) | Next report: "
         if report_type == "morning":
-            message += "18:00 CET"
+            message += "around 18:00 CET"
         else:
-            message += "10:00 CET tomorrow"
+            message += "around 10:00 CET tomorrow"
         message += "\n" + "=" * 50
         
         # Send email report
@@ -746,9 +817,34 @@ class FinanceMonitor:
         
         logger.info(f"{report_type.capitalize()} daily report sent")
     
+    def should_send_daily_report(self) -> Optional[str]:
+        """Check if it's time to send a daily report"""
+        paris_now = datetime.now(self.paris_tz)
+        current_hour = paris_now.hour
+        current_minute = paris_now.minute
+        today = paris_now.date()
+        
+        # Morning report window: 9:30 AM - 10:30 AM
+        if 9 <= current_hour <= 10 and current_minute >= 30 if current_hour == 9 else current_hour == 10 and current_minute <= 30:
+            if not self.has_sent_report_today('morning', today):
+                return 'morning'
+        
+        # Evening report window: 5:30 PM - 6:30 PM
+        if 17 <= current_hour <= 18 and current_minute >= 30 if current_hour == 17 else current_hour == 18 and current_minute <= 30:
+            if not self.has_sent_report_today('evening', today):
+                return 'evening'
+        
+        return None
+    
     def monitor_assets(self):
         """Main monitoring function for multiple assets"""
         logger.info("Starting comprehensive asset monitoring cycle...")
+        
+        # Check if we should send a daily report during this monitoring cycle
+        report_type = self.should_send_daily_report()
+        if report_type:
+            logger.info(f"📧 Time for {report_type} daily report!")
+            self.send_daily_report(report_type)
         
         alerts = []
         market_status = []
@@ -766,11 +862,17 @@ class FinanceMonitor:
         
         # Monitor all stocks from configuration
         stock_symbols = self.config.get('stocks', {})
-        logger.info(f"Monitoring {len(stock_symbols)} stocks...")
+        logger.info(f"Monitoring {len(stock_symbols)} stocks via Google Finance...")
         
+        batch_count = 0
         for symbol, stock_config in stock_symbols.items():
             try:
-                data = self.get_stock_price(symbol)
+                # Rate limiting - pause every 5 stocks
+                if batch_count > 0 and batch_count % 5 == 0:
+                    logger.info(f"Rate limiting pause after {batch_count} stocks...")
+                    time.sleep(2)
+                
+                data = self.get_stock_price_google(symbol)
                 if data:
                     # Store price data
                     self.store_price_data(symbol, data['current_price'], 'stock')
@@ -788,6 +890,8 @@ class FinanceMonitor:
                     logger.info(f"{stock_config['name']} ({symbol}): Market closed")
                 else:
                     logger.warning(f"Failed to get data for {symbol}")
+                
+                batch_count += 1
                     
             except Exception as e:
                 logger.error(f"Error monitoring {symbol}: {e}")
@@ -919,45 +1023,54 @@ class FinanceMonitor:
         logger.info(f"   📰 {len(news_items)} news items collected")
 
 def main():
-    # Complete 37-stock French portfolio configuration
+    # YOUR 37 SPECIFIC STOCKS - Update thresholds based on your investment strategy
     default_stocks = {
-        "OVH.PA": {"name": "OVH Groupe SAS", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 5.0}},
+        # Tech & Gaming
+        "PARRO.PA": {"name": "Parrot", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
         "STMPA.PA": {"name": "STMicroelectronics", "thresholds": {"high": 35.0, "low": 15.0, "change_percent": 8.0}},
-        "STLAP.PA": {"name": "Stellantis", "thresholds": {"high": 20.0, "low": 8.0, "change_percent": 10.0}},
+        "ALCJ.PA": {"name": "CROSSJECT", "thresholds": {"high": 2.0, "low": 0.5, "change_percent": 20.0}},
+        "UBI.PA": {"name": "Ubisoft", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}},
+        "ALDNE.PA": {"name": "DON'T NOD", "thresholds": {"high": 30.0, "low": 10.0, "change_percent": 15.0}},
+        "ALLDL.PA": {"name": "Groupe LDLC", "thresholds": {"high": 60.0, "low": 30.0, "change_percent": 10.0}},
+        "ALWLX.PA": {"name": "Wallix Group SA", "thresholds": {"high": 20.0, "low": 5.0, "change_percent": 15.0}},
+        "ALDEE.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "AL2SI.PA": {"name": "2CRSi", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
+        
+        # Green Energy & Environment
+        "ALEUP.PA": {"name": "Europlasma", "thresholds": {"high": 1.0, "low": 0.05, "change_percent": 25.0}},
+        "ALDRV.PA": {"name": "Drone Volt SA", "thresholds": {"high": 0.5, "low": 0.05, "change_percent": 20.0}},
+        "ALHRS.PA": {"name": "Hydrogen Refueling Solutions", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "ALDLT.PA": {"name": "Delta Drone SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 20.0}},
+        "ALLHY.PA": {"name": "Lhyfe SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
+        "ALCRB.PA": {"name": "Carbios", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
+        "ARVEN.PA": {"name": "Arverne Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
+        "ALOPH.PA": {"name": "Osmosun SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        
+        # Healthcare & Biotech
+        "ALCAR.PA": {"name": "Carmat", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
+        "ALNFL.PA": {"name": "NFL Biosciences SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
+        "VALN.PA": {"name": "Valneva SE", "thresholds": {"high": 10.0, "low": 2.0, "change_percent": 15.0}},
+        
+        # Large Caps & Industrial
+        "OVH.PA": {"name": "OVH Groupe SAS", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 5.0}},
         "ATO.PA": {"name": "Atos", "thresholds": {"high": 5.0, "low": 0.5, "change_percent": 15.0}},
         "MT.PA": {"name": "ArcelorMittal", "thresholds": {"high": 30.0, "low": 15.0, "change_percent": 8.0}},
         "ENGI.PA": {"name": "Engie", "thresholds": {"high": 18.0, "low": 10.0, "change_percent": 6.0}},
+        "STLAP.PA": {"name": "Stellantis", "thresholds": {"high": 20.0, "low": 8.0, "change_percent": 10.0}},
         "EN.PA": {"name": "Bouygues", "thresholds": {"high": 40.0, "low": 25.0, "change_percent": 6.0}},
         "CA.PA": {"name": "Carrefour", "thresholds": {"high": 18.0, "low": 12.0, "change_percent": 6.0}},
-        "UBI.PA": {"name": "Ubisoft", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}},
-        "PARRO.PA": {"name": "Parrot", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "ALCJ.PA": {"name": "CROSSJECT", "thresholds": {"high": 2.0, "low": 0.1, "change_percent": 20.0}},
-        "ALEUP.PA": {"name": "Europlasma", "thresholds": {"high": 1.0, "low": 0.05, "change_percent": 25.0}},
-        "ALDRV.PA": {"name": "Drone Volt SA", "thresholds": {"high": 0.5, "low": 0.05, "change_percent": 20.0}},
-        "ALLDL.PA": {"name": "Groupe LDLC", "thresholds": {"high": 60.0, "low": 30.0, "change_percent": 10.0}},
-        "ALHRS.PA": {"name": "Hydrogen Refueling Solutions", "thresholds": {"high": 10.0, "low": 1.0, "change_percent": 20.0}},
-        "ALDLT.PA": {"name": "Delta Drone SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 20.0}},
-        "ALLHY.PA": {"name": "Lhyfe SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
-        "ALCAR.PA": {"name": "Carmat", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "KOF.PA": {"name": "Kaufman & Broad", "thresholds": {"high": 35.0, "low": 20.0, "change_percent": 8.0}},
-        "ETL.PA": {"name": "Eutelsat Communications", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 8.0}},
-        "ELI.PA": {"name": "Elior Group", "thresholds": {"high": 8.0, "low": 3.0, "change_percent": 12.0}},
-        "ALCRB.PA": {"name": "Carbios", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "OEN.PA": {"name": "Œneo", "thresholds": {"high": 12.0, "low": 6.0, "change_percent": 10.0}},
-        "ALDNE.PA": {"name": "DON'T NOD", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
-        "PLX.PA": {"name": "Pluxee NV", "thresholds": {"high": 35.0, "low": 20.0, "change_percent": 8.0}},
-        "ALWAL.PA": {"name": "Wallix Group SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
+        "FRVIA.PA": {"name": "Forvia", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
+        
+        # Services & Consumer
+        "KOF.PA": {"name": "Kaufman & Broad", "thresholds": {"high": 40.0, "low": 20.0, "change_percent": 10.0}},
+        "ETL.PA": {"name": "Eutelsat Communications", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
+        "ELIOR.PA": {"name": "Elior Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
+        "ONEO.PA": {"name": "Œneo", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 10.0}},
+        "PLX.PA": {"name": "Pluxee NV", "thresholds": {"high": 30.0, "low": 20.0, "change_percent": 8.0}},
         "CRI.PA": {"name": "Chargeurs", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
-        "ALDEZ.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 15.0}},
-        "VLA.PA": {"name": "Valneva SE", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
-        "ALVNP.PA": {"name": "Vinpai SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 25.0}},
-        "AVARV.PA": {"name": "Arverne Group", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        "FDJ.PA": {"name": "FDJ United", "thresholds": {"high": 50.0, "low": 30.0, "change_percent": 8.0}},
-        "ALMOS.PA": {"name": "Osmosun SA", "thresholds": {"high": 2.0, "low": 0.2, "change_percent": 25.0}},
-        "ALNFL.PA": {"name": "NFL Biosciences SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 25.0}},
-        "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        "ALCRSI.PA": {"name": "2CRSi", "thresholds": {"high": 8.0, "low": 2.0, "change_percent": 15.0}},
-        "EO.PA": {"name": "Forvia", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}}
+        "VINP.PA": {"name": "Vinpai SA", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
+        "FDJ.PA": {"name": "FDJ United", "thresholds": {"high": 40.0, "low": 30.0, "change_percent": 8.0}},
+        "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}}
     }
     
     # Configuration - use environment variables for production
@@ -994,18 +1107,21 @@ def main():
     run_mode = os.getenv('RUN_MODE', 'continuous')
     
     if run_mode == 'continuous':
-        # Schedule monitoring every 20 minutes (optimized for 37 stocks)
+        # Schedule monitoring every 20 minutes
         schedule.every(20).minutes.do(monitor.monitor_assets)
         
-        # Schedule daily email reports (Paris timezone)
-        schedule.every().day.at("10:00").do(lambda: monitor.send_daily_report("morning"))
-        schedule.every().day.at("18:00").do(lambda: monitor.send_daily_report("evening"))
-        
-        logger.info("🚀 Financial Monitor Bot started in CONTINUOUS mode")
-        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks and {len(config['crypto'])} cryptocurrencies every 20 minutes")
+        logger.info("🚀 Financial Monitor Bot started in CONTINUOUS mode (Google Finance Edition)")
+        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks via Google Finance + {len(config['crypto'])} cryptocurrencies")
         logger.info("📱 Slack alerts for urgent notifications")
-        logger.info("📧 Daily email reports at 10:00 and 18:00 Paris time")
-        logger.info("🏢 Complete French portfolio: OVH, STMicroelectronics, Stellantis, Atos, ArcelorMittal, Engie, Bouygues, Carrefour, Ubisoft + 28 more stocks")
+        logger.info("📧 Daily email reports around 10:00 and 18:00 Paris time (sent during regular monitoring)")
+        logger.info(f"🏢 Portfolio: {len(default_stocks)} French stocks including CAC40 components")
+        
+        # Test email configuration on first startup
+        logger.info("🧪 Testing email configuration...")
+        if monitor.test_email_configuration():
+            logger.info("✅ Email test successful - you should receive a test email shortly")
+        else:
+            logger.warning("❌ Email test failed - check your Gmail App Password configuration")
         
         # Run once immediately
         monitor.monitor_assets()
@@ -1018,24 +1134,12 @@ def main():
     else:
         # Single execution mode (for limited platforms like PythonAnywhere)
         paris_now = datetime.now(pytz.timezone('Europe/Paris'))
-        current_hour = paris_now.hour
         
-        logger.info(f"🤖 Daily Financial Monitor Execution (Single Run Mode)")
+        logger.info(f"🤖 Daily Financial Monitor Execution (Single Run Mode - Google Finance)")
         logger.info(f"⏰ Running at {paris_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         
-        # Always run monitoring
+        # Always run monitoring (which will check if daily reports are needed)
         monitor.monitor_assets()
-        
-        # Handle daily reports based on time
-        today = paris_now.date()
-        
-        if current_hour >= 10 and not monitor.has_sent_report_today('morning', today):
-            logger.info("🌅 Sending morning report...")
-            monitor.send_daily_report("morning")
-        
-        if current_hour >= 18 and not monitor.has_sent_report_today('evening', today):
-            logger.info("🌆 Sending evening report...")
-            monitor.send_daily_report("evening")
         
         logger.info("✅ Single execution completed")
 
