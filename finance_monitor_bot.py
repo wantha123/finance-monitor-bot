@@ -686,19 +686,28 @@ Enhanced Financial Monitor Bot
             return False
     
     def send_email_notification(self, subject: str, message: str):
-        """Send email notification"""
+        """Send enhanced HTML email notification with colors and clear formatting"""
         try:
             email_config = self.config.get('email', {})
             if not email_config.get('enabled', False):
                 logger.info(f"Email disabled. Would send: {subject}")
                 return
             
-            msg = MIMEMultipart()
+            msg = MIMEMultipart('alternative')
             msg['From'] = email_config['from_email']
             msg['To'] = email_config['to_email']
             msg['Subject'] = subject
             
-            msg.attach(MIMEText(message, 'plain'))
+            # Create both plain text and HTML versions
+            # Plain text version (fallback)
+            text_part = MIMEText(message, 'plain', 'utf-8')
+            
+            # HTML version (enhanced)
+            html_part = MIMEText(message, 'html', 'utf-8')
+            
+            # Attach both versions
+            msg.attach(text_part)
+            msg.attach(html_part)
             
             server = smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port'])
             server.starttls()
@@ -707,12 +716,66 @@ Enhanced Financial Monitor Bot
             server.sendmail(email_config['from_email'], email_config['to_email'], text)
             server.quit()
             
-            logger.info(f"Email sent: {subject}")
+            logger.info(f"Enhanced email sent: {subject}")
         except Exception as e:
             logger.error(f"Error sending email: {e}")
     
+    def check_price_alerts(self, symbol: str, current_price: float, thresholds: Dict) -> List[str]:
+        """Check if price alerts should be triggered with enhanced formatting"""
+        alerts = []
+        
+        # Get previous price from database
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT price FROM price_history 
+            WHERE symbol = ? 
+            ORDER BY timestamp DESC LIMIT 1
+        ''', (symbol,))
+        
+        result = cursor.fetchone()
+        prev_price = result[0] if result else current_price
+        
+        # Calculate percentage change
+        if prev_price > 0:
+            change_percent = ((current_price - prev_price) / prev_price) * 100
+        else:
+            change_percent = 0
+        
+        # Get asset info for better display
+        asset_name = symbol
+        asset_type = "crypto"
+        if symbol in self.config.get('stocks', {}):
+            asset_name = self.config['stocks'][symbol]['name']
+            asset_type = "stock"
+        elif symbol in self.config.get('crypto', {}):
+            asset_name = self.config['crypto'][symbol]['name']
+            asset_type = "crypto"
+        
+        # Check thresholds with enhanced formatting
+        if current_price >= thresholds.get('high', float('inf')):
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"🔴 HIGH THRESHOLD REACHED\n{alert}")
+        
+        if current_price <= thresholds.get('low', 0):
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"🔵 LOW THRESHOLD REACHED\n{alert}")
+        
+        if abs(change_percent) >= thresholds.get('change_percent', 10):
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"⚡ SIGNIFICANT MOVEMENT\n{alert}")
+        
+        conn.close()
+        return alerts
+    
     def send_slack_notification(self, message: str):
-        """Send notification to Slack"""
+        """Send notification to Slack with enhanced formatting and colors"""
         try:
             slack_config = self.config.get('slack', {})
             if not slack_config.get('enabled', False):
@@ -724,22 +787,76 @@ Enhanced Financial Monitor Bot
                 logger.error("Slack webhook URL not configured")
                 return
             
-            # Format message for Slack
+            # Parse message to create rich formatting
+            lines = message.split('\n')
+            
+            # Find alerts section
+            alert_blocks = []
+            current_section = None
+            
+            for line in lines:
+                if '🚨 PRICE ALERTS' in line:
+                    current_section = 'alerts'
+                    continue
+                elif current_section == 'alerts' and line.strip().startswith('🔴'):
+                    # HIGH ALERT - Red
+                    alert_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"🔴 *HIGH ALERT* {line.strip()[2:]}"
+                        },
+                        "accessory": {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "📈 View Chart"},
+                            "style": "danger",
+                            "url": "https://coingecko.com"
+                        }
+                    })
+                elif current_section == 'alerts' and line.strip().startswith('🔵'):
+                    # LOW ALERT - Blue
+                    alert_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"🔵 *LOW ALERT* {line.strip()[2:]}"
+                        },
+                        "accessory": {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "📉 View Chart"},
+                            "style": "primary",
+                            "url": "https://coingecko.com"
+                        }
+                    })
+                elif current_section == 'alerts' and ('📈' in line or '📉' in line):
+                    # MOVEMENT ALERT - Green/Red
+                    emoji = "📈" if "📈" in line else "📉"
+                    style = "primary" if "📈" in line else "danger"
+                    alert_blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"{emoji} *MOVEMENT* {line.strip()[2:]}"
+                        },
+                        "accessory": {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": f"{emoji} Details"},
+                            "style": style,
+                            "url": "https://coingecko.com"
+                        }
+                    })
+                elif line.strip() and not line.startswith('  '):
+                    current_section = None
+            
+            # Create enhanced payload with visual sections
             payload = {
-                "text": "📊 Financial Monitor Alert",
+                "text": "📊 Portfolio Alert",
                 "blocks": [
                     {
                         "type": "header",
                         "text": {
                             "type": "plain_text",
-                            "text": "📊 Enhanced Financial Monitoring Report"
-                        }
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"```{message}```"
+                            "text": "🚨 Portfolio Alert - Enhanced Financial Monitor"
                         }
                     },
                     {
@@ -747,20 +864,312 @@ Enhanced Financial Monitor Bot
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
+                                "text": f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET | 📊 37 Stocks + 60+ Crypto"
                             }
                         ]
+                    },
+                    {
+                        "type": "divider"
                     }
                 ]
             }
             
+            # Add alert blocks if any
+            if alert_blocks:
+                payload["blocks"].extend(alert_blocks)
+                payload["blocks"].append({"type": "divider"})
+            
+            # Add summary section
+            summary_text = ""
+            for line in lines:
+                if 'TOP GAINERS:' in line or 'TOP LOSERS:' in line:
+                    summary_text += f"*{line.strip()}*\n"
+                elif line.strip().startswith('🪙') or line.strip().startswith('🏢'):
+                    # Enhanced formatting for assets
+                    parts = line.strip().split(':')
+                    if len(parts) >= 2:
+                        asset_info = parts[1].strip()
+                        if '(' in asset_info and ')' in asset_info:
+                            # Extract price and change
+                            price_part = asset_info.split('(')[0].strip()
+                            change_part = asset_info.split('(')[1].replace(')', '').strip()
+                            
+                            # Color coding based on change
+                            if change_part.startswith('+'):
+                                summary_text += f"  🟢 {parts[0].strip()}: `{price_part}` *{change_part}*\n"
+                            elif change_part.startswith('-'):
+                                summary_text += f"  🔴 {parts[0].strip()}: `{price_part}` *{change_part}*\n"
+                            else:
+                                summary_text += f"  ⚪ {parts[0].strip()}: `{price_part}` {change_part}\n"
+                        else:
+                            summary_text += f"  {line.strip()}\n"
+            
+            if summary_text:
+                payload["blocks"].append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": summary_text
+                    }
+                })
+            
+            # Add footer
+            payload["blocks"].extend([
+                {
+                    "type": "divider"
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": "🤖 Enhanced Financial Monitor | 🔄 Next check in 20min | 📧 Daily reports at 10:00 & 18:00 CET"
+                        }
+                    ]
+                }
+            ])
+            
             response = requests.post(webhook_url, json=payload, timeout=10)
             response.raise_for_status()
             
-            logger.info("Slack notification sent successfully")
+            logger.info("Enhanced Slack notification sent successfully")
             
         except Exception as e:
             logger.error(f"Error sending Slack notification: {e}")
+    
+    def format_price_change_display(self, asset_name: str, symbol: str, current_price: float, 
+                                   previous_price: float, change_percent: float, asset_type: str = "stock") -> str:
+        """Format price change with clear before/after display and visual indicators"""
+        
+        # Determine direction and color indicators
+        if change_percent > 0:
+            direction_emoji = "📈"
+            change_indicator = "GAIN"
+            trend_symbol = "▲"
+        elif change_percent < 0:
+            direction_emoji = "📉"
+            change_indicator = "LOSS" 
+            trend_symbol = "▼"
+        else:
+            direction_emoji = "➡️"
+            change_indicator = "FLAT"
+            trend_symbol = "━"
+        
+        # Asset type emoji
+        type_emoji = "🏢" if asset_type == "stock" else "🪙"
+        
+        # Price formatting based on value
+        if current_price >= 1:
+            price_format = ".2f"
+        elif current_price >= 0.01:
+            price_format = ".4f"
+        else:
+            price_format = ".6f"
+        
+        # Create clear before/after display
+        formatted_display = (
+            f"{direction_emoji} {type_emoji} {asset_name} ({symbol})\n"
+            f"   💰 BEFORE: €{previous_price:{price_format}} → AFTER: €{current_price:{price_format}}\n"
+            f"   {trend_symbol} {change_indicator}: {change_percent:+.2f}%"
+        )
+        
+        return formatted_display
+    
+    def create_enhanced_email_report(self, report_data: dict, report_type: str = "morning") -> str:
+        """Create enhanced email report with colors and clear formatting"""
+        
+        summary = report_data
+        paris_time = datetime.now(self.paris_tz)
+        
+        # Email header with clear visual hierarchy
+        if report_type == "morning":
+            header_emoji = "🌅"
+            greeting = "Good morning! Here's your enhanced financial market update:"
+            time_context = "Start your day with clear market insights"
+        else:
+            header_emoji = "🌆"
+            greeting = "Good evening! Here's your enhanced end-of-day financial summary:"
+            time_context = "Review today's market performance"
+        
+        # HTML-style formatting for email (most email clients support basic HTML)
+        html_message = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+        .section {{ margin: 20px 0; padding: 15px; border-left: 4px solid #667eea; background: #f8f9fa; }}
+        .gain {{ color: #28a745; font-weight: bold; }}
+        .loss {{ color: #dc3545; font-weight: bold; }}
+        .neutral {{ color: #6c757d; font-weight: bold; }}
+        .price {{ font-family: 'Courier New', monospace; background: #e9ecef; padding: 2px 6px; border-radius: 4px; }}
+        .asset-row {{ margin: 8px 0; padding: 8px; background: white; border-radius: 4px; border-left: 3px solid #dee2e6; }}
+        .asset-row.gain {{ border-left-color: #28a745; }}
+        .asset-row.loss {{ border-left-color: #dc3545; }}
+        .stats {{ background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 15px 0; }}
+        .footer {{ background: #343a40; color: white; padding: 15px; border-radius: 8px; margin-top: 20px; text-align: center; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{header_emoji} Enhanced Financial Report - {paris_time.strftime('%A, %B %d, %Y')}</h1>
+        <p>{greeting}</p>
+        <p><strong>📊 Portfolio Coverage:</strong> {len(self.config.get('stocks', {}))} French Stocks + {len(self.config.get('crypto', {}))} Cryptocurrencies</p>
+        <p><strong>🕐 Generated:</strong> {paris_time.strftime('%H:%M %Z')} | <strong>💡 Context:</strong> {time_context}</p>
+    </div>
+"""
+        
+        # Market Status Section
+        html_message += """
+    <div class="section">
+        <h2>📊 Market Status</h2>
+"""
+        for status in summary['market_status']:
+            if "OPEN" in status:
+                html_message += f'        <p style="color: #28a745;"><strong>{status}</strong></p>\n'
+            else:
+                html_message += f'        <p style="color: #dc3545;"><strong>{status}</strong></p>\n'
+        
+        html_message += "    </div>\n"
+        
+        # Top Performers Section with Enhanced Visuals
+        if 'stock_data' in summary or 'crypto_data' in summary:
+            all_assets = []
+            
+            # Collect all assets
+            for symbol, data in summary.get('stock_data', {}).items():
+                stock_config = self.config['stocks'][symbol]
+                all_assets.append({
+                    'name': stock_config['name'],
+                    'symbol': symbol,
+                    'price': data['current_price'],
+                    'change': data['change_percent'],
+                    'type': '🏢',
+                    'category': 'stock'
+                })
+            
+            for symbol, data in summary.get('crypto_data', {}).items():
+                crypto_config = self.config['crypto'][symbol]
+                all_assets.append({
+                    'name': crypto_config['name'],
+                    'symbol': symbol,
+                    'price': data['current_price_eur'],
+                    'change': data['change_percent_24h'] or 0,
+                    'type': '🪙',
+                    'category': 'crypto'
+                })
+            
+            # Sort by performance
+            all_assets.sort(key=lambda x: x['change'], reverse=True)
+            
+            # Top Performers
+            html_message += """
+    <div class="section">
+        <h2>📈 Top Performers (Best 5)</h2>
+"""
+            for asset in all_assets[:5]:
+                change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
+                price_display = f"€{asset['price']:.4f}" if asset['price'] < 1 else f"€{asset['price']:.2f}"
+                
+                html_message += f"""
+        <div class="asset-row {change_class}">
+            <strong>{asset['type']} {asset['name']} ({asset['symbol']})</strong><br>
+            <span class="price">{price_display}</span> 
+            <span class="{change_class}">({asset['change']:+.2f}%)</span>
+        </div>
+"""
+            
+            # Worst Performers
+            html_message += """
+        <h2>📉 Worst Performers (Bottom 5)</h2>
+"""
+            for asset in all_assets[-5:]:
+                change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
+                price_display = f"€{asset['price']:.4f}" if asset['price'] < 1 else f"€{asset['price']:.2f}"
+                
+                html_message += f"""
+        <div class="asset-row {change_class}">
+            <strong>{asset['type']} {asset['name']} ({asset['symbol']})</strong><br>
+            <span class="price">{price_display}</span> 
+            <span class="{change_class}">({asset['change']:+.2f}%)</span>
+        </div>
+"""
+            
+            html_message += "    </div>\n"
+            
+            # Portfolio Statistics
+            total_assets = len(all_assets)
+            gainers = len([a for a in all_assets if a['change'] > 0])
+            losers = len([a for a in all_assets if a['change'] < 0])
+            unchanged = total_assets - gainers - losers
+            
+            html_message += f"""
+    <div class="stats">
+        <h2>📊 Portfolio Statistics</h2>
+        <div style="display: flex; justify-content: space-around; text-align: center;">
+            <div>
+                <h3 class="gain">📈 Gainers</h3>
+                <p><strong>{gainers}</strong> ({gainers/total_assets*100:.1f}%)</p>
+            </div>
+            <div>
+                <h3 class="loss">📉 Losers</h3>
+                <p><strong>{losers}</strong> ({losers/total_assets*100:.1f}%)</p>
+            </div>
+            <div>
+                <h3 class="neutral">➡️ Unchanged</h3>
+                <p><strong>{unchanged}</strong> ({unchanged/total_assets*100:.1f}%)</p>
+            </div>
+            <div>
+                <h3>📊 Total Assets</h3>
+                <p><strong>{total_assets}</strong> monitored</p>
+            </div>
+        </div>
+    </div>
+"""
+        
+        # Daily Changes Section
+        if summary.get('daily_changes'):
+            html_message += """
+    <div class="section">
+        <h2>🔄 Biggest 24-Hour Movers</h2>
+"""
+            changes_sorted = sorted(summary['daily_changes'].items(), 
+                                  key=lambda x: abs(x[1]['change_percent']), reverse=True)
+            
+            for symbol, change_data in changes_sorted[:8]:  # Show top 8 biggest movers
+                change_class = "gain" if change_data['change_percent'] > 0 else "loss"
+                direction_emoji = "📈" if change_data['change_percent'] > 0 else "📉"
+                
+                old_price_display = f"€{change_data['old_price']:.4f}" if change_data['old_price'] < 1 else f"€{change_data['old_price']:.2f}"
+                new_price_display = f"€{change_data['current_price']:.4f}" if change_data['current_price'] < 1 else f"€{change_data['current_price']:.2f}"
+                
+                html_message += f"""
+        <div class="asset-row {change_class}">
+            <strong>{direction_emoji} {change_data['name']}</strong><br>
+            <span class="price">BEFORE: {old_price_display}</span> → 
+            <span class="price">AFTER: {new_price_display}</span><br>
+            <span class="{change_class}">Change: {change_data['change_percent']:+.2f}%</span>
+        </div>
+"""
+            
+            html_message += "    </div>\n"
+        
+        # Footer
+        next_report = "around 18:00 CET" if report_type == "morning" else "around 10:00 CET tomorrow"
+        html_message += f"""
+    <div class="footer">
+        <h3>🤖 Enhanced Financial Monitor</h3>
+        <p><strong>Next Report:</strong> {next_report} | <strong>Monitoring:</strong> 24/7 with smart scheduling</p>
+        <p><strong>Data Sources:</strong> Yahoo Finance (Stocks) + CoinGecko (Crypto) | <strong>Currency:</strong> All prices in EUR</p>
+        <p><em>Powered by AI-driven financial monitoring with dynamic holiday calculation</em></p>
+    </div>
+</body>
+</html>
+"""
+        
+        return html_message
     
     def send_notification(self, subject: str, message: str, notification_type: str = "alert"):
         """Send notification via configured method"""
@@ -844,47 +1253,65 @@ Enhanced Financial Monitor Bot
         return summary
     
     def send_daily_report(self, report_type: str = "morning"):
-        """Send daily email report"""
+        """Send enhanced daily email report with visual improvements"""
         logger.info(f"Generating {report_type} daily report...")
         
         summary = self.get_daily_summary()
+        
+        # Create enhanced HTML report
+        html_message = self.create_enhanced_email_report(summary, report_type)
+        
         paris_time = datetime.now(self.paris_tz)
         
         if report_type == "morning":
-            subject = f"🌅 Morning Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-            greeting = "Good morning! Here's your financial market update:"
+            subject = f"🌅 Enhanced Morning Report - {paris_time.strftime('%Y-%m-%d')} - Portfolio Update"
         else:  # evening
-            subject = f"🌆 Evening Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-            greeting = "Good evening! Here's your end-of-day financial summary:"
+            subject = f"🌆 Enhanced Evening Report - {paris_time.strftime('%Y-%m-%d')} - Market Summary"
         
-        message = f"{greeting}\n\n"
-        message += "=" * 60 + "\n"
-        message += f"📅 ENHANCED DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
-        message += f"🕐 Generated at: {paris_time.strftime('%H:%M %Z')}\n"
-        message += f"📊 Coverage: {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
-        message += "=" * 60 + "\n\n"
+        # Send enhanced email report
+        self.send_notification(subject, html_message, notification_type="daily_report")
         
-        # Market status
-        message += "📊 MARKET STATUS:\n"
-        for status in summary['market_status']:
-            message += f"  {status}\n"
-        message += "\n"
+        # Record that we sent this report
+        self.record_report_sent(report_type)
         
-        # Current prices - separate stocks and crypto
-        message += "💰 CURRENT PRICES:\n\n"
-        
-        # Show top performing and worst performing assets
-        all_assets = []
-        
-        # Add stocks
-        for symbol, data in summary['stock_data'].items():
-            stock_config = self.config['stocks'][symbol]
-            all_assets.append({
-                'name': stock_config['name'],
-                'symbol': symbol,
-                'price': data['current_price'],
-                'change': data['change_percent'],
-                'type': '🏢',
+        logger.info(f"{report_type.capitalize()} enhanced daily report sent")
+    
+    def send_notification(self, subject: str, message: str, notification_type: str = "alert"):
+        """Send notification via configured method with enhanced formatting"""
+        if notification_type == "daily_report":
+            # Daily reports go to email (already HTML formatted)
+            self.send_email_notification(subject, message)
+        else:
+            # Alerts go to Slack (enhanced Slack formatting)
+            self.send_slack_notification(message)
+            
+            # Also send critical alerts via email for backup
+            critical_keywords = ["HIGH THRESHOLD", "LOW THRESHOLD", "SIGNIFICANT MOVEMENT"]
+            if any(keyword in message for keyword in critical_keywords):
+                # Convert to simple HTML for email alerts
+                html_alert = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+        .alert {{ background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 8px; margin: 10px 0; }}
+        .critical {{ background: #f8d7da; border: 1px solid #f5c6cb; }}
+        .gain {{ color: #28a745; font-weight: bold; }}
+        .loss {{ color: #dc3545; font-weight: bold; }}
+        .price {{ font-family: monospace; background: #e9ecef; padding: 2px 6px; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <div class="alert critical">
+        <h2>🚨 Critical Portfolio Alert</h2>
+        <pre style="white-space: pre-wrap; font-family: inherit;">{message}</pre>
+        <p><em>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET</em></p>
+    </div>
+</body>
+</html>
+"""
+                self.send_email_notification(f"🚨 {subject}", html_alert)🏢',
                 'category': 'stock'
             })
         
@@ -1029,7 +1456,7 @@ Enhanced Financial Monitor Bot
         return None
     
     def monitor_assets(self):
-        """Main monitoring function for multiple assets"""
+        """Main monitoring function for multiple assets with enhanced notifications"""
         logger.info("Starting comprehensive asset monitoring cycle...")
         
         # Check if we should send a daily report during this monitoring cycle
@@ -1063,7 +1490,7 @@ Enhanced Financial Monitor Bot
                     # Store price data
                     self.store_price_data(symbol, data['current_price'], 'stock')
                     
-                    # Check alerts
+                    # Check alerts with enhanced formatting
                     thresholds = stock_config.get('thresholds', {})
                     stock_alerts = self.check_price_alerts(symbol, data['current_price'], thresholds)
                     alerts.extend(stock_alerts)
@@ -1153,71 +1580,12 @@ Enhanced Financial Monitor Bot
         else:
             logger.info("Skipping news check (preserving API limits for large portfolio)")
         
-        # Send notifications if there are alerts
+        # Send enhanced notifications if there are alerts
         if alerts:
             subject = f"🚨 Portfolio Alert - {len(alerts)} notifications from enhanced portfolio"
             
-            message = "=== ENHANCED PORTFOLIO MONITORING ALERT ===\n\n"
-            
-            # Market status
-            message += "📊 MARKET STATUS:\n"
-            for status in market_status:
-                message += f"  {status}\n"
-            message += "\n"
-            
-            # Price alerts
-            message += f"🚨 PRICE ALERTS ({len(alerts)}):\n"
-            for alert in alerts:
-                message += f"  {alert}\n"
-            message += "\n"
-            
-            # Portfolio performance summary
-            if stock_data or crypto_data:
-                message += "📈 PORTFOLIO PERFORMANCE:\n"
-                
-                # Combine and sort by absolute change
-                all_assets = []
-                for symbol, data in stock_data.items():
-                    all_assets.append((symbol, data, stock_symbols[symbol]['name'], 'stock'))
-                for symbol, data in crypto_data.items():
-                    all_assets.append((symbol, data, crypto_symbols[symbol]['name'], 'crypto'))
-                
-                # Sort by absolute change percentage
-                all_assets.sort(key=lambda x: abs(x[1].get('change_percent', x[1].get('change_percent_24h', 0))), reverse=True)
-                
-                # Show top 3 gainers and top 3 losers
-                message += "  🔥 TOP GAINERS:\n"
-                gainers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) > 0)][:3]
-                for symbol, data, name, type_asset in gainers:
-                    change = data.get('change_percent', data.get('change_percent_24h', 0))
-                    if type_asset == 'crypto':
-                        price = data['current_price_eur']
-                        message += f"    🪙 {name}: €{price:.4f} (+{change:.1f}%)\n"
-                    else:
-                        price = data['current_price']
-                        message += f"    🏢 {name}: €{price:.2f} (+{change:.1f}%)\n"
-                
-                message += "  🩸 TOP LOSERS:\n"
-                losers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) < 0)][:3]
-                for symbol, data, name, type_asset in losers:
-                    change = data.get('change_percent', data.get('change_percent_24h', 0))
-                    if type_asset == 'crypto':
-                        price = data['current_price_eur']
-                        message += f"    🪙 {name}: €{price:.4f} ({change:.1f}%)\n"
-                    else:
-                        price = data['current_price']
-                        message += f"    🏢 {name}: €{price:.2f} ({change:.1f}%)\n"
-                message += "\n"
-            
-            # News (if any)
-            if news_items:
-                message += "📰 PRIORITY NEWS:\n"
-                for news in news_items[:3]:  # Max 3 news items
-                    message += f"  • {news.title} ({news.source})\n"
-                message += "\n"
-            
-            message += f"📊 Enhanced Portfolio: {len(stock_data)} stocks + {len(crypto_data)} crypto active\n"
-            message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
+            # Create enhanced alert message
+            message = self.create_enhanced_alert_message(alerts, market_status, stock_data, crypto_data, news_items)
             
             self.send_notification(subject, message, notification_type="alert")
         
@@ -1232,6 +1600,85 @@ Enhanced Financial Monitor Bot
         logger.info(f"   ⚠️ {total_errors} assets failed/skipped") 
         logger.info(f"   🚨 {len(alerts)} alerts generated")
         logger.info(f"   📰 {len(news_items)} news items collected")
+    
+    def create_enhanced_alert_message(self, alerts: List[str], market_status: List[str], 
+                                    stock_data: Dict, crypto_data: Dict, news_items: List) -> str:
+        """Create visually enhanced alert message for Slack"""
+        
+        # Header with clear visual hierarchy
+        message = "🚨 ENHANCED PORTFOLIO MONITORING ALERT\n"
+        message += "=" * 50 + "\n\n"
+        
+        # Market status with color indicators
+        message += "📊 MARKET STATUS:\n"
+        for status in market_status:
+            if "OPEN" in status:
+                message += f"  ✅ {status}\n"
+            else:
+                message += f"  ❌ {status}\n"
+        message += "\n"
+        
+        # Enhanced price alerts with clear formatting
+        message += f"🚨 PRICE ALERTS ({len(alerts)}):\n"
+        for i, alert in enumerate(alerts, 1):
+            message += f"\n📍 ALERT #{i}:\n"
+            message += f"{alert}\n"
+            message += "─" * 30 + "\n"
+        message += "\n"
+        
+        # Portfolio performance summary with visual enhancements
+        if stock_data or crypto_data:
+            message += "📈 PORTFOLIO PERFORMANCE SNAPSHOT:\n"
+            
+            # Combine and sort by absolute change
+            all_assets = []
+            for symbol, data in stock_data.items():
+                all_assets.append((symbol, data, self.config['stocks'][symbol]['name'], 'stock'))
+            for symbol, data in crypto_data.items():
+                all_assets.append((symbol, data, self.config['crypto'][symbol]['name'], 'crypto'))
+            
+            # Sort by absolute change percentage
+            all_assets.sort(key=lambda x: abs(x[1].get('change_percent', x[1].get('change_percent_24h', 0))), reverse=True)
+            
+            # Show top 3 gainers and top 3 losers with enhanced formatting
+            message += "\n  🔥 TOP GAINERS:\n"
+            gainers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) > 0)][:3]
+            for symbol, data, name, type_asset in gainers:
+                change = data.get('change_percent', data.get('change_percent_24h', 0))
+                if type_asset == 'crypto':
+                    price = data['current_price_eur']
+                    message += f"    🟢 🪙 {name}: €{price:.4f} (▲{change:.1f}%)\n"
+                else:
+                    price = data['current_price']
+                    message += f"    🟢 🏢 {name}: €{price:.2f} (▲{change:.1f}%)\n"
+            
+            message += "\n  🩸 TOP LOSERS:\n"
+            losers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) < 0)][:3]
+            for symbol, data, name, type_asset in losers:
+                change = data.get('change_percent', data.get('change_percent_24h', 0))
+                if type_asset == 'crypto':
+                    price = data['current_price_eur']
+                    message += f"    🔴 🪙 {name}: €{price:.4f} (▼{abs(change):.1f}%)\n"
+                else:
+                    price = data['current_price']
+                    message += f"    🔴 🏢 {name}: €{price:.2f} (▼{abs(change):.1f}%)\n"
+            message += "\n"
+        
+        # Priority news with better formatting
+        if news_items:
+            message += "📰 PRIORITY NEWS HIGHLIGHTS:\n"
+            for i, news in enumerate(news_items[:3], 1):
+                message += f"  {i}. {news.title[:80]}{'...' if len(news.title) > 80 else ''}\n"
+                message += f"     📡 {news.source}\n"
+            message += "\n"
+        
+        # Enhanced footer with key metrics
+        message += "=" * 50 + "\n"
+        message += f"📊 Portfolio: {len(stock_data)} stocks + {len(crypto_data)} crypto active\n"
+        message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET\n"
+        message += f"🤖 Enhanced Financial Monitor v2.0"
+        
+        return message
 
 def main():
     # YOUR 37 SPECIFIC STOCKS - Update thresholds based on your investment strategy
