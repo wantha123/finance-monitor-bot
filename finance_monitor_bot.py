@@ -82,6 +82,10 @@ class FinanceMonitor:
         self.coingecko_cache = {}
         self.last_coingecko_update = None
         
+        # Dynamic holiday calculation (updates automatically each year)
+        self.market_holidays_cache = {}
+        self.last_holiday_update_year = None
+        
         # CoinGecko ID mapping for cryptocurrencies
         self.crypto_id_mapping = {
             'ETH': 'ethereum',
@@ -146,23 +150,94 @@ class FinanceMonitor:
             'ZEUS': 'zeus-network',
             'MC': 'merit-circle'
         }
+    
+    def calculate_easter_date(self, year: int) -> datetime:
+        """Calculate Easter Sunday date for a given year using the algorithm"""
+        # Using the anonymous Gregorian algorithm
+        a = year % 19
+        b = year // 100
+        c = year % 100
+        d = b // 4
+        e = b % 4
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i = c // 4
+        k = c % 4
+        l = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * l) // 451
+        month = (h + l - 7 * m + 114) // 31
+        day = ((h + l - 7 * m + 114) % 31) + 1
         
-        # 2025 Euronext Paris holidays (market closed)
-        self.market_holidays_2025 = [
-            datetime(2025, 1, 1),   # New Year's Day
-            datetime(2025, 4, 18),  # Good Friday
-            datetime(2025, 4, 21),  # Easter Monday
-            datetime(2025, 5, 1),   # Labour Day
-            datetime(2025, 5, 8),   # Victory in Europe Day
-            datetime(2025, 5, 29),  # Ascension Day
-            datetime(2025, 6, 9),   # Whit Monday
-            datetime(2025, 7, 14),  # Bastille Day
-            datetime(2025, 8, 15),  # Assumption of Mary
-            datetime(2025, 11, 1),  # All Saints' Day
-            datetime(2025, 11, 11), # Armistice Day
-            datetime(2025, 12, 25), # Christmas Day
-            datetime(2025, 12, 26), # Boxing Day
+        return datetime(year, month, day)
+    
+    def get_euronext_holidays(self, year: int) -> List[datetime]:
+        """Calculate Euronext Paris holidays for a given year"""
+        # Check cache first
+        if (self.last_holiday_update_year == year and 
+            year in self.market_holidays_cache):
+            return self.market_holidays_cache[year]
+        
+        holidays = []
+        
+        # Fixed holidays that are the same every year
+        fixed_holidays = [
+            (1, 1),   # New Year's Day
+            (5, 1),   # Labour Day
+            (5, 8),   # Victory in Europe Day (WWII)
+            (7, 14),  # Bastille Day (French National Day)
+            (8, 15),  # Assumption of Mary
+            (11, 1),  # All Saints' Day
+            (11, 11), # Armistice Day (WWI)
+            (12, 25), # Christmas Day
+            (12, 26), # Boxing Day
         ]
+        
+        # Add fixed holidays
+        for month, day in fixed_holidays:
+            holidays.append(datetime(year, month, day))
+        
+        # Calculate Easter-dependent holidays
+        easter_sunday = self.calculate_easter_date(year)
+        
+        # Good Friday (2 days before Easter)
+        good_friday = easter_sunday - timedelta(days=2)
+        holidays.append(good_friday)
+        
+        # Easter Monday (1 day after Easter)
+        easter_monday = easter_sunday + timedelta(days=1)
+        holidays.append(easter_monday)
+        
+        # Ascension Day (39 days after Easter)
+        ascension_day = easter_sunday + timedelta(days=39)
+        holidays.append(ascension_day)
+        
+        # Whit Monday (50 days after Easter)
+        whit_monday = easter_sunday + timedelta(days=50)
+        holidays.append(whit_monday)
+        
+        # Sort holidays chronologically
+        holidays.sort()
+        
+        # Cache the results
+        self.market_holidays_cache[year] = holidays
+        self.last_holiday_update_year = year
+        
+        logger.info(f"📅 Calculated {len(holidays)} Euronext Paris holidays for {year}")
+        
+        return holidays
+    
+    def is_euronext_holiday(self, date: datetime) -> bool:
+        """Check if a specific date is a Euronext Paris holiday"""
+        year = date.year
+        holidays = self.get_euronext_holidays(year)
+        
+        # Check if the date (ignoring time) matches any holiday
+        date_only = date.date()
+        for holiday in holidays:
+            if holiday.date() == date_only:
+                return True
+        return False
     
     def init_database(self):
         """Initialize SQLite database for storing historical data"""
@@ -248,11 +323,9 @@ class FinanceMonitor:
         if now_paris.weekday() >= 5:  # Saturday = 5, Sunday = 6
             return False
         
-        # Check if it's a holiday
-        today = now_paris.date()
-        for holiday in self.market_holidays_2025:
-            if holiday.date() == today:
-                return False
+        # Check if it's a holiday using dynamic calculation
+        if self.is_euronext_holiday(now_paris):
+            return False
         
         # Check trading hours (9:00 AM - 5:30 PM CET)
         market_open = now_paris.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -270,24 +343,27 @@ class FinanceMonitor:
             next_day += timedelta(days=1)
         
         # Find next trading day
-        while True:
+        max_days_to_check = 14  # Prevent infinite loop
+        days_checked = 0
+        
+        while days_checked < max_days_to_check:
             # Skip weekends
             if next_day.weekday() >= 5:
                 next_day += timedelta(days=1)
+                days_checked += 1
                 continue
             
-            # Skip holidays
-            is_holiday = False
-            for holiday in self.market_holidays_2025:
-                if holiday.date() == next_day.date():
-                    is_holiday = True
-                    break
-            
-            if is_holiday:
+            # Skip holidays using dynamic calculation
+            if self.is_euronext_holiday(next_day):
                 next_day += timedelta(days=1)
+                days_checked += 1
                 continue
             
             return next_day
+        
+        # Fallback if something goes wrong
+        logger.warning("Could not find next market open date within 14 days")
+        return next_day
     
     def get_stock_price(self, symbol: str) -> Optional[Dict]:
         """Get stock price from Yahoo Finance with EUR conversion"""
@@ -1298,10 +1374,27 @@ def main():
     run_mode = os.getenv('RUN_MODE', 'continuous')
     
     if run_mode == 'continuous':
-        # Schedule monitoring every 20 minutes (optimized for large portfolio)
-        schedule.every(20).minutes.do(monitor.monitor_assets)
+        # Intelligent scheduling based on market hours
+        def smart_schedule():
+            paris_now = datetime.now(pytz.timezone('Europe/Paris'))
+            is_market_open = monitor.is_euronext_open()
+            
+            if is_market_open:
+                # During market hours: monitor every 20 minutes (stocks + crypto)
+                schedule.every(20).minutes.do(monitor.monitor_assets)
+                logger.info("📊 Market hours: Monitoring every 20 minutes (stocks + crypto)")
+            else:
+                # After hours: monitor every 60 minutes (crypto only, save resources)
+                schedule.every(60).minutes.do(monitor.monitor_assets)
+                logger.info("🌙 After hours: Monitoring every 60 minutes (crypto focus)")
         
-        logger.info("🚀 Enhanced Financial Monitor Bot started in CONTINUOUS mode")
+        # Initial smart scheduling
+        smart_schedule()
+        
+        # Re-evaluate schedule every 4 hours to adapt to market open/close
+        schedule.every(4).hours.do(smart_schedule)
+        
+        logger.info("🚀 Enhanced Financial Monitor Bot started in CONTINUOUS mode with SMART SCHEDULING")
         logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks via Yahoo Finance + {len(config['crypto'])} cryptocurrencies via CoinGecko")
         logger.info("💱 All prices converted to EUR for consistency")
         logger.info("📱 Slack alerts for urgent notifications")
@@ -1309,6 +1402,7 @@ def main():
         logger.info(f"🏢 Stocks: {len(default_stocks)} French companies")
         logger.info(f"🪙 Crypto: {len(default_crypto)} cryptocurrencies")
         logger.info("⚡ CoinGecko API optimized with bulk fetching and caching")
+        logger.info("🧠 Smart scheduling: 20min (market hours) / 60min (after hours)")
         
         # Test email configuration on first startup
         logger.info("🧪 Testing email configuration...")
@@ -1317,10 +1411,42 @@ def main():
         else:
             logger.warning("❌ Email test failed - check your Gmail App Password configuration")
         
+        # Display current year's holidays for transparency
+        current_year = datetime.now().year
+        holidays = monitor.get_euronext_holidays(current_year)
+        logger.info(f"📅 {current_year} Euronext Paris Market Holidays:")
+        for holiday in holidays:
+            holiday_names = {
+                (1, 1): "New Year's Day",
+                (5, 1): "Labour Day", 
+                (5, 8): "Victory in Europe Day",
+                (7, 14): "Bastille Day",
+                (8, 15): "Assumption of Mary",
+                (11, 1): "All Saints' Day",
+                (11, 11): "Armistice Day",
+                (12, 25): "Christmas Day",
+                (12, 26): "Boxing Day"
+            }
+            
+            # Check if it's an Easter-related holiday
+            easter = monitor.calculate_easter_date(current_year)
+            if holiday == easter - timedelta(days=2):
+                name = "Good Friday"
+            elif holiday == easter + timedelta(days=1):
+                name = "Easter Monday"
+            elif holiday == easter + timedelta(days=39):
+                name = "Ascension Day"
+            elif holiday == easter + timedelta(days=50):
+                name = "Whit Monday"
+            else:
+                name = holiday_names.get((holiday.month, holiday.day), "Unknown Holiday")
+            
+            logger.info(f"   🗓️ {holiday.strftime('%B %d, %Y')} - {name}")
+        
         # Run once immediately
         monitor.monitor_assets()
         
-        # Keep running
+        # Keep running with smart scheduling
         while True:
             schedule.run_pending()
             time.sleep(60)  # Check every minute
