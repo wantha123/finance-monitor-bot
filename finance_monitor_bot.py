@@ -1,4 +1,26 @@
-market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
+def monitor_assets(self):
+        """Main monitoring function for multiple assets with enhanced notifications"""
+        logger.info("Starting comprehensive asset monitoring cycle...")
+        
+        # Check if we should send a daily report during this monitoring cycle
+        report_type = self.should_send_daily_report()
+        if report_type:
+            logger.info(f"📧 Time for {report_type} daily report!")
+            self.send_daily_report(report_type)
+        
+        alerts = []
+        market_status = []
+        stock_data = {}
+        crypto_data = {}
+        
+        # Check market status
+        if self.is_euronext_open():
+            market_status.append("🟢 Euronext Paris: OPEN")
+        else:
+            next_open = self.get_next_market_open()
+            market_status.append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
+        
+        market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
         
         # Monitor all stocks from configuration
         stock_symbols = self.config.get('stocks', {})
