@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Financial & Crypto Monitoring Bot
-Monitors 37 French stocks and Solana cryptocurrency with news alerts
+Monitors 37 French stocks and 60+ cryptocurrencies with news alerts
 Uses Yahoo Finance with automatic EUR conversion
 """
 
@@ -77,6 +77,75 @@ class FinanceMonitor:
         # Exchange rate cache (updated every hour)
         self.usd_to_eur_rate = None
         self.last_rate_update = None
+        
+        # CoinGecko API cache to avoid rate limits
+        self.coingecko_cache = {}
+        self.last_coingecko_update = None
+        
+        # CoinGecko ID mapping for cryptocurrencies
+        self.crypto_id_mapping = {
+            'ETH': 'ethereum',
+            'SOL': 'solana',
+            'DOGE': 'dogecoin',
+            'ADA': 'cardano',
+            'LINK': 'chainlink',
+            'ZEC': 'zcash',
+            'PEPE': 'pepe',
+            'UNI': 'uniswap',
+            'CRO': 'crypto-com-chain',
+            'MNT': 'mantle',
+            'RENDER': 'render-token',
+            'FET': 'fetch-ai',  # Artificial Superintelligence Alliance
+            'ARB': 'arbitrum',
+            'FIL': 'filecoin',
+            'ALGO': 'algorand',
+            'MKR': 'maker',  # Sky (formerly MakerDAO)
+            'GRT': 'the-graph',
+            'ENS': 'ethereum-name-service',
+            'GALA': 'gala',
+            'FLOW': 'flow',
+            'MANA': 'decentraland',
+            'STRK': 'starknet',
+            'EIGEN': 'eigenlayer',
+            'EGLD': 'elrond-erd-2',  # MultiversX
+            'MOVE': 'move-protocol',
+            'LPT': 'livepeer',
+            'MOG': 'mog-coin',
+            'MASK': 'mask-network',
+            'MINA': 'mina-protocol',
+            'BAT': 'basic-attention-token',
+            'ENJ': 'enjin-coin',
+            'COTI': 'coti',
+            'BAND': 'band-protocol',
+            'UMA': 'uma',
+            'BICO': 'biconomy',
+            'KEEP': 'keep-network',
+            'POWR': 'power-ledger',
+            'AUDIO': 'audius',
+            'RLC': 'iexec-rlc',
+            'SAGA': 'saga-2',
+            'CTSI': 'cartesi',
+            'SCRT': 'secret',
+            'TNSR': 'tensor',
+            'C98': 'coin98',
+            'OGN': 'origin-protocol',
+            'RAD': 'radworks',
+            'NYM': 'nym',
+            'ARPA': 'arpa',
+            'ALCX': 'alchemix',
+            'ATLAS': 'star-atlas',
+            'POLIS': 'star-atlas-dao',
+            'PERP': 'perpetual-protocol',
+            'STEP': 'step-finance',
+            'RBN': 'robonomics-network',
+            'KP3R': 'keep3rv1',
+            'KEY': 'selfkey',
+            'KILT': 'kilt-protocol',
+            'TEER': 'integritee',
+            'CRU': 'crust-network',
+            'ZEUS': 'zeus-network',
+            'MC': 'merit-circle'
+        }
         
         # 2025 Euronext Paris holidays (market closed)
         self.market_holidays_2025 = [
@@ -276,67 +345,129 @@ class FinanceMonitor:
             logger.error(f"Error fetching {symbol} price: {e}")
             return None
 
-    def get_solana_price(self) -> Optional[Dict]:
-        """Get Solana price from CoinGecko API (free) - converted to EUR"""
+    def get_all_crypto_prices(self) -> Dict[str, Dict]:
+        """Get all cryptocurrency prices from CoinGecko API in one call (free tier optimized)"""
+        now = datetime.now()
+        
+        # Cache for 5 minutes to avoid rate limits (CoinGecko free tier: 10-50 calls/minute)
+        if (self.last_coingecko_update and 
+            (now - self.last_coingecko_update).total_seconds() < 300):
+            logger.info("Using cached crypto prices (avoiding rate limits)")
+            return self.coingecko_cache
+        
         max_retries = 3
-        retry_delay = 5  # seconds
+        retry_delay = 10  # seconds
+        
+        # Get all CoinGecko IDs for our cryptocurrencies
+        crypto_symbols = self.config.get('crypto', {})
+        coingecko_ids = []
+        symbol_to_id = {}
+        
+        for symbol in crypto_symbols.keys():
+            if symbol in self.crypto_id_mapping:
+                coingecko_id = self.crypto_id_mapping[symbol]
+                coingecko_ids.append(coingecko_id)
+                symbol_to_id[coingecko_id] = symbol
+            else:
+                logger.warning(f"No CoinGecko ID mapping found for {symbol}")
+        
+        logger.info(f"Fetching prices for {len(coingecko_ids)} cryptocurrencies from CoinGecko...")
         
         for attempt in range(max_retries):
             try:
+                # CoinGecko simple/price endpoint - can get up to 250 coins per call
                 url = "https://api.coingecko.com/api/v3/simple/price"
-                params = {
-                    'ids': 'solana',
-                    'vs_currencies': 'usd,eur',
-                    'include_24hr_change': 'true',
-                    'include_24hr_vol': 'true'
-                }
                 
-                response = requests.get(url, params=params, timeout=10)
+                # Split into chunks of 100 to be safe with free tier
+                chunk_size = 100
+                all_data = {}
                 
-                if response.status_code == 429:  # Rate limited
-                    logger.warning(f"Rate limited by CoinGecko, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
-                    if attempt < max_retries - 1:  # Don't sleep on last attempt
-                        time.sleep(retry_delay)
-                        retry_delay *= 2  # Exponential backoff
-                        continue
-                    else:
-                        logger.error("Max retries reached for CoinGecko API")
-                        return None
+                for i in range(0, len(coingecko_ids), chunk_size):
+                    chunk_ids = coingecko_ids[i:i + chunk_size]
+                    
+                    params = {
+                        'ids': ','.join(chunk_ids),
+                        'vs_currencies': 'usd,eur',
+                        'include_24hr_change': 'true',
+                        'include_24hr_vol': 'true',
+                        'include_market_cap': 'true'
+                    }
+                    
+                    logger.info(f"Fetching chunk {i//chunk_size + 1}/{(len(coingecko_ids)-1)//chunk_size + 1} ({len(chunk_ids)} coins)")
+                    
+                    response = requests.get(url, params=params, timeout=15)
+                    
+                    if response.status_code == 429:  # Rate limited
+                        wait_time = retry_delay * (attempt + 1)
+                        logger.warning(f"Rate limited by CoinGecko, waiting {wait_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                        if attempt < max_retries - 1:
+                            time.sleep(wait_time)
+                            break  # Break inner loop, continue outer retry loop
+                        else:
+                            logger.error("Max retries reached for CoinGecko API")
+                            return self.coingecko_cache if self.coingecko_cache else {}
+                    
+                    response.raise_for_status()
+                    chunk_data = response.json()
+                    all_data.update(chunk_data)
+                    
+                    # Small delay between chunks to be respectful to free tier
+                    if i + chunk_size < len(coingecko_ids):
+                        time.sleep(2)
                 
-                response.raise_for_status()
-                data = response.json()
+                # Convert to our format
+                crypto_data = {}
+                for coingecko_id, data in all_data.items():
+                    if coingecko_id in symbol_to_id:
+                        symbol = symbol_to_id[coingecko_id]
+                        
+                        # Get EUR price directly or convert from USD
+                        price_eur = data.get('eur')
+                        if price_eur is None and data.get('usd'):
+                            price_eur = self.usd_to_eur(data.get('usd'))
+                        
+                        # Convert volume to EUR if needed
+                        volume_usd = data.get('usd_24h_vol')
+                        volume_eur = self.usd_to_eur(volume_usd) if volume_usd else None
+                        
+                        # Convert market cap to EUR
+                        market_cap_usd = data.get('usd_market_cap')
+                        market_cap_eur = self.usd_to_eur(market_cap_usd) if market_cap_usd else None
+                        
+                        crypto_data[symbol] = {
+                            'symbol': symbol,
+                            'coingecko_id': coingecko_id,
+                            'current_price_eur': price_eur,
+                            'current_price_usd': data.get('usd'),
+                            'change_percent_24h': data.get('usd_24h_change'),
+                            'volume_24h_eur': volume_eur,
+                            'volume_24h_usd': volume_usd,
+                            'market_cap_eur': market_cap_eur,
+                            'market_cap_usd': market_cap_usd,
+                            'timestamp': datetime.now().isoformat(),
+                            'market_open': True,  # Crypto markets are always open
+                            'exchange_rate_used': self.get_usd_to_eur_rate()
+                        }
                 
-                sol_data = data.get('solana', {})
+                # Update cache
+                self.coingecko_cache = crypto_data
+                self.last_coingecko_update = now
                 
-                # Get EUR price directly or convert from USD
-                price_eur = sol_data.get('eur')
-                if price_eur is None and sol_data.get('usd'):
-                    price_eur = self.usd_to_eur(sol_data.get('usd'))
-                
-                # Convert volume to EUR if needed
-                volume_usd = sol_data.get('usd_24h_vol')
-                volume_eur = self.usd_to_eur(volume_usd) if volume_usd else None
-                
-                return {
-                    'symbol': 'SOL',
-                    'current_price_eur': price_eur,
-                    'current_price_usd': sol_data.get('usd'),  # Keep USD for reference
-                    'change_percent_24h': sol_data.get('usd_24h_change'),
-                    'volume_24h_eur': volume_eur,
-                    'timestamp': datetime.now().isoformat(),
-                    'market_open': True,  # Crypto markets are always open
-                    'exchange_rate_used': self.get_usd_to_eur_rate()
-                }
+                logger.info(f"Successfully fetched {len(crypto_data)} cryptocurrency prices")
+                return crypto_data
                 
             except Exception as e:
-                logger.error(f"Error fetching Solana price (attempt {attempt + 1}): {e}")
+                logger.error(f"Error fetching crypto prices (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
+                    time.sleep(retry_delay * (attempt + 1))
                 else:
-                    return None
+                    # Return cached data if available
+                    if self.coingecko_cache:
+                        logger.warning("Using cached crypto data due to API failure")
+                        return self.coingecko_cache
+                    return {}
         
-        return None
+        return {}
     
     def check_price_alerts(self, symbol: str, current_price: float, thresholds: Dict) -> List[str]:
         """Check if price alerts should be triggered"""
@@ -451,7 +582,7 @@ class FinanceMonitor:
         """Test email configuration by sending a test message"""
         try:
             subject = "🧪 Financial Monitor - Email Test"
-            message = """This is a test email from your Financial Monitor Bot.
+            message = """This is a test email from your Enhanced Financial Monitor Bot.
 
 If you receive this message, your email configuration is working correctly!
 
@@ -459,11 +590,15 @@ If you receive this message, your email configuration is working correctly!
 ✅ Authentication: Successful  
 ✅ Email Delivery: Working
 
+Your monitoring covers:
+📊 37 French stocks via Yahoo Finance
+🪙 60+ cryptocurrencies via CoinGecko
+
 Your morning reports will be sent around 10:00 AM Paris time.
 Your evening reports will be sent around 6:00 PM Paris time.
 
 ---
-Financial Monitor Bot (Yahoo Finance Edition)
+Enhanced Financial Monitor Bot
 """
             
             self.send_email_notification(subject, message)
@@ -521,7 +656,7 @@ Financial Monitor Bot (Yahoo Finance Edition)
                         "type": "header",
                         "text": {
                             "type": "plain_text",
-                            "text": "📊 Financial Monitoring Report"
+                            "text": "📊 Enhanced Financial Monitoring Report"
                         }
                     },
                     {
@@ -587,13 +722,9 @@ Financial Monitor Bot (Yahoo Finance Edition)
             if data:
                 summary['stock_data'][symbol] = data
         
-        # Get current prices for all crypto
-        crypto_symbols = self.config.get('crypto', {})
-        for symbol, crypto_config in crypto_symbols.items():
-            if symbol == 'SOL':
-                data = self.get_solana_price()
-                if data:
-                    summary['crypto_data'][symbol] = data
+        # Get current prices for all crypto (in one efficient API call)
+        all_crypto_data = self.get_all_crypto_prices()
+        summary['crypto_data'] = all_crypto_data
         
         # Get daily changes from database
         conn = sqlite3.connect(self.db_path)
@@ -603,7 +734,7 @@ Financial Monitor Bot (Yahoo Finance Edition)
         yesterday = datetime.now() - timedelta(days=1)
         
         # Check all tracked symbols
-        all_symbols = list(stock_symbols.keys()) + list(crypto_symbols.keys())
+        all_symbols = list(stock_symbols.keys()) + list(all_crypto_data.keys())
         for symbol in all_symbols:
             cursor.execute('''
                 SELECT price FROM price_history 
@@ -624,7 +755,8 @@ Financial Monitor Bot (Yahoo Finance Edition)
                 
                 if current_price:
                     change = ((current_price - old_price) / old_price) * 100
-                    asset_name = stock_symbols.get(symbol, crypto_symbols.get(symbol, {})).get('name', symbol)
+                    asset_name = stock_symbols.get(symbol, {}).get('name', 
+                                  self.config.get('crypto', {}).get(symbol, {}).get('name', symbol))
                     summary['daily_changes'][symbol] = {
                         'name': asset_name,
                         'old_price': old_price,
@@ -650,10 +782,11 @@ Financial Monitor Bot (Yahoo Finance Edition)
             greeting = "Good evening! Here's your end-of-day financial summary:"
         
         message = f"{greeting}\n\n"
-        message += "=" * 50 + "\n"
-        message += f"📅 DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
+        message += "=" * 60 + "\n"
+        message += f"📅 ENHANCED DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
         message += f"🕐 Generated at: {paris_time.strftime('%H:%M %Z')}\n"
-        message += "=" * 50 + "\n\n"
+        message += f"📊 Coverage: {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
+        message += "=" * 60 + "\n\n"
         
         # Market status
         message += "📊 MARKET STATUS:\n"
@@ -661,8 +794,8 @@ Financial Monitor Bot (Yahoo Finance Edition)
             message += f"  {status}\n"
         message += "\n"
         
-        # Current prices
-        message += "💰 CURRENT PRICES:\n"
+        # Current prices - separate stocks and crypto
+        message += "💰 CURRENT PRICES:\n\n"
         
         # Show top performing and worst performing assets
         all_assets = []
@@ -675,7 +808,8 @@ Financial Monitor Bot (Yahoo Finance Edition)
                 'symbol': symbol,
                 'price': data['current_price'],
                 'change': data['change_percent'],
-                'type': '🏢'
+                'type': '🏢',
+                'category': 'stock'
             })
         
         # Add crypto
@@ -685,28 +819,44 @@ Financial Monitor Bot (Yahoo Finance Edition)
                 'name': crypto_config['name'],
                 'symbol': symbol,
                 'price': data['current_price_eur'],
-                'change': data['change_percent_24h'],
-                'type': '🪙'
+                'change': data['change_percent_24h'] or 0,
+                'type': '🪙',
+                'category': 'crypto'
             })
         
         # Sort by change percentage (best to worst)
         all_assets.sort(key=lambda x: x['change'], reverse=True)
         
         # Show top 5 performers and bottom 5
-        message += "  📈 TOP PERFORMERS:\n"
+        message += "  📈 TOP PERFORMERS (All Assets):\n"
         for asset in all_assets[:5]:
-            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
+            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
         
-        if len(all_assets) > 5:
-            message += "  📉 WORST PERFORMERS:\n"
-            for asset in all_assets[-3:]:
-                message += f"    {asset['type']} {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
+        message += "\n  📉 WORST PERFORMERS (All Assets):\n"
+        for asset in all_assets[-5:]:
+            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
         
         message += "\n"
         
+        # Separate stock and crypto performance
+        stocks_only = [a for a in all_assets if a['category'] == 'stock']
+        crypto_only = [a for a in all_assets if a['category'] == 'crypto']
+        
+        if stocks_only:
+            message += f"🏢 STOCK PERFORMANCE (Top 3):\n"
+            for asset in stocks_only[:3]:
+                message += f"  📈 {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
+            message += "\n"
+        
+        if crypto_only:
+            message += f"🪙 CRYPTO PERFORMANCE (Top 5):\n"
+            for asset in crypto_only[:5]:
+                message += f"  🚀 {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
+            message += "\n"
+        
         # Daily changes (if available)
         if summary['daily_changes']:
-            message += "📈 24-HOUR CHANGES:\n"
+            message += "📈 24-HOUR CHANGES (Biggest Movers):\n"
             
             # Sort by absolute change percentage
             changes_sorted = sorted(summary['daily_changes'].items(), 
@@ -715,13 +865,28 @@ Financial Monitor Bot (Yahoo Finance Edition)
             for symbol, change_data in changes_sorted[:10]:  # Show top 10 changes
                 direction = "📈" if change_data['change_percent'] > 0 else "📉" if change_data['change_percent'] < 0 else "➡️"
                 message += f"  {direction} {change_data['name']}: {change_data['change_percent']:+.2f}% "
-                message += f"(€{change_data['old_price']:.2f} → €{change_data['current_price']:.2f})\n"
+                message += f"(€{change_data['old_price']:.4f} → €{change_data['current_price']:.4f})\n"
             message += "\n"
         
-        # Recent news - focus on top assets
-        priority_assets = ['OVH.PA', 'STMPA.PA', 'STLAP.PA']  # Most important assets
+        # Portfolio statistics
+        if all_assets:
+            total_assets = len(all_assets)
+            gainers = len([a for a in all_assets if a['change'] > 0])
+            losers = len([a for a in all_assets if a['change'] < 0])
+            unchanged = total_assets - gainers - losers
+            
+            message += "📊 PORTFOLIO STATISTICS:\n"
+            message += f"  📈 Gainers: {gainers} ({gainers/total_assets*100:.1f}%)\n"
+            message += f"  📉 Losers: {losers} ({losers/total_assets*100:.1f}%)\n"
+            message += f"  ➡️ Unchanged: {unchanged} ({unchanged/total_assets*100:.1f}%)\n"
+            message += f"  📊 Total Assets: {total_assets} ({len(stocks_only)} stocks + {len(crypto_only)} crypto)\n\n"
+        
+        # Recent news - focus on top assets and crypto
+        priority_assets = ['OVH.PA', 'STMPA.PA', 'STLAP.PA']  # Most important stocks
+        priority_crypto = ['ETH', 'SOL', 'DOGE', 'ADA']  # Major crypto
         news_found = False
         
+        # Stock news
         for symbol in priority_assets:
             if symbol in self.config.get('stocks', {}):
                 stock_config = self.config['stocks'][symbol]
@@ -731,29 +896,34 @@ Financial Monitor Bot (Yahoo Finance Edition)
                         message += "📰 PORTFOLIO NEWS (Last 24h):\n"
                         news_found = True
                     for news in news_items[:1]:  # Limit to 1 article per major stock
-                        message += f"  • {stock_config['name']}: {news.title}\n"
+                        message += f"  🏢 {stock_config['name']}: {news.title}\n"
                         message += f"    {news.source} | {news.url}\n"
         
-        # Add Solana news
-        sol_news = self.get_news("Solana cryptocurrency OR SOL crypto")
-        if sol_news:
-            if not news_found:
-                message += "📰 PORTFOLIO NEWS (Last 24h):\n"
-            for news in sol_news[:1]:  # Limit to 1 article
-                message += f"  • Solana: {news.title}\n"
-                message += f"    {news.source} | {news.url}\n"
+        # Crypto news
+        for symbol in priority_crypto:
+            if symbol in self.config.get('crypto', {}):
+                crypto_config = self.config['crypto'][symbol]
+                news_items = self.get_news(f"{crypto_config['name']} cryptocurrency")
+                if news_items:
+                    if not news_found:
+                        message += "📰 PORTFOLIO NEWS (Last 24h):\n"
+                        news_found = True
+                    for news in news_items[:1]:  # Limit to 1 article per major crypto
+                        message += f"  🪙 {crypto_config['name']}: {news.title}\n"
+                        message += f"    {news.source} | {news.url}\n"
         
         if news_found:
             message += "\n"
         
         # Footer
-        message += "=" * 50 + "\n"
-        message += "🤖 Automated Financial Monitor (Yahoo Finance) | Next report: "
+        message += "=" * 60 + "\n"
+        message += "🤖 Enhanced Financial Monitor (Yahoo Finance + CoinGecko) | Next report: "
         if report_type == "morning":
             message += "around 18:00 CET"
         else:
             message += "around 10:00 CET tomorrow"
-        message += "\n" + "=" * 50
+        message += f"\n💡 Monitoring {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
+        message += "=" * 60
         
         # Send email report
         self.send_notification(subject, message, notification_type="daily_report")
@@ -835,16 +1005,19 @@ Financial Monitor Bot (Yahoo Finance Edition)
                 logger.error(f"Error monitoring {symbol}: {e}")
                 continue
         
-        # Monitor cryptocurrencies
+        # Monitor all cryptocurrencies (efficient bulk fetch)
         crypto_symbols = self.config.get('crypto', {})
-        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies...")
+        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies via CoinGecko...")
         
-        for symbol, crypto_config in crypto_symbols.items():
-            try:
-                if symbol == 'SOL':
-                    data = self.get_solana_price()
-                    if data:
-                        # Store EUR price in database
+        try:
+            all_crypto_data = self.get_all_crypto_prices()
+            
+            for symbol, crypto_config in crypto_symbols.items():
+                if symbol in all_crypto_data:
+                    data = all_crypto_data[symbol]
+                    
+                    # Store EUR price in database
+                    if data['current_price_eur']:
                         self.store_price_data(symbol, data['current_price_eur'], 'crypto')
                         
                         thresholds = crypto_config.get('thresholds', {})
@@ -854,13 +1027,16 @@ Financial Monitor Bot (Yahoo Finance Edition)
                         # Store for reporting
                         crypto_data[symbol] = data
                         
-                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.2f} ({data['change_percent_24h']:+.2f}%) [Rate: {data['exchange_rate_used']:.4f}]")
-                
-            except Exception as e:
-                logger.error(f"Error monitoring {symbol}: {e}")
-                continue
+                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.4f} ({data['change_percent_24h']:+.2f}%)")
+                    else:
+                        logger.warning(f"No EUR price available for {symbol}")
+                else:
+                    logger.warning(f"No data returned for {symbol}")
+                    
+        except Exception as e:
+            logger.error(f"Error monitoring cryptocurrencies: {e}")
         
-        # Get news - highly optimized for 37 stocks
+        # Get news - highly optimized for large portfolio
         current_minute = datetime.now().minute
         should_check_news = (
             self.is_euronext_open() and current_minute == 0  # Only once per hour during market hours
@@ -869,8 +1045,11 @@ Financial Monitor Bot (Yahoo Finance Edition)
         news_items = []
         if should_check_news:
             logger.info("Checking news for priority assets (API optimized)...")
-            # Only check news for top 5 most important assets to save API calls
+            # Only check news for top assets to save API calls
             priority_stocks = ['OVH.PA', 'STMPA.PA', 'STLAP.PA', 'MT.PA', 'ENGI.PA']
+            priority_crypto = ['ETH', 'SOL', 'DOGE']
+            
+            # Stock news
             for symbol in priority_stocks:
                 if symbol in stock_data:
                     stock_config = stock_symbols[symbol]
@@ -882,14 +1061,27 @@ Financial Monitor Bot (Yahoo Finance Edition)
                     except Exception as e:
                         logger.warning(f"News fetch failed for {symbol}: {e}")
                         continue
+            
+            # Crypto news
+            for symbol in priority_crypto:
+                if symbol in crypto_data:
+                    crypto_config = crypto_symbols[symbol]
+                    try:
+                        news_query = f"{crypto_config['name']} cryptocurrency"
+                        symbol_news = self.get_news(news_query)
+                        if symbol_news:
+                            news_items.extend(symbol_news[:1])  # Max 1 news per crypto
+                    except Exception as e:
+                        logger.warning(f"News fetch failed for {symbol}: {e}")
+                        continue
         else:
-            logger.info("Skipping news check (preserving API limits for 37-stock portfolio)")
+            logger.info("Skipping news check (preserving API limits for large portfolio)")
         
         # Send notifications if there are alerts
         if alerts:
-            subject = f"🚨 Portfolio Alert - {len(alerts)} notifications from {len(stock_symbols)} stocks"
+            subject = f"🚨 Portfolio Alert - {len(alerts)} notifications from enhanced portfolio"
             
-            message = "=== 37-STOCK PORTFOLIO MONITORING ALERT ===\n\n"
+            message = "=== ENHANCED PORTFOLIO MONITORING ALERT ===\n\n"
             
             # Market status
             message += "📊 MARKET STATUS:\n"
@@ -924,9 +1116,10 @@ Financial Monitor Bot (Yahoo Finance Edition)
                     change = data.get('change_percent', data.get('change_percent_24h', 0))
                     if type_asset == 'crypto':
                         price = data['current_price_eur']
+                        message += f"    🪙 {name}: €{price:.4f} (+{change:.1f}%)\n"
                     else:
                         price = data['current_price']
-                    message += f"    📈 {name}: €{price:.2f} (+{change:.1f}%)\n"
+                        message += f"    🏢 {name}: €{price:.2f} (+{change:.1f}%)\n"
                 
                 message += "  🩸 TOP LOSERS:\n"
                 losers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) < 0)][:3]
@@ -934,9 +1127,10 @@ Financial Monitor Bot (Yahoo Finance Edition)
                     change = data.get('change_percent', data.get('change_percent_24h', 0))
                     if type_asset == 'crypto':
                         price = data['current_price_eur']
+                        message += f"    🪙 {name}: €{price:.4f} ({change:.1f}%)\n"
                     else:
                         price = data['current_price']
-                    message += f"    📉 {name}: €{price:.2f} ({change:.1f}%)\n"
+                        message += f"    🏢 {name}: €{price:.2f} ({change:.1f}%)\n"
                 message += "\n"
             
             # News (if any)
@@ -946,16 +1140,19 @@ Financial Monitor Bot (Yahoo Finance Edition)
                     message += f"  • {news.title} ({news.source})\n"
                 message += "\n"
             
-            message += f"📊 Portfolio: {len(stock_data)} stocks active + {len(crypto_data)} crypto\n"
+            message += f"📊 Enhanced Portfolio: {len(stock_data)} stocks + {len(crypto_data)} crypto active\n"
             message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
             
             self.send_notification(subject, message, notification_type="alert")
         
         # Summary logging
         total_monitored = len([d for d in stock_data.values() if d]) + len([d for d in crypto_data.values() if d])
-        total_errors = len(stock_symbols) + len(crypto_symbols) - total_monitored
-        logger.info(f"📊 Monitoring cycle completed:")
-        logger.info(f"   ✅ {total_monitored} assets successfully monitored")
+        total_possible = len(stock_symbols) + len(crypto_symbols)
+        total_errors = total_possible - total_monitored
+        logger.info(f"📊 Enhanced monitoring cycle completed:")
+        logger.info(f"   ✅ {total_monitored}/{total_possible} assets successfully monitored")
+        logger.info(f"   🏢 {len(stock_data)} stocks active")
+        logger.info(f"   🪙 {len(crypto_data)} cryptocurrencies active")
         logger.info(f"   ⚠️ {total_errors} assets failed/skipped") 
         logger.info(f"   🚨 {len(alerts)} alerts generated")
         logger.info(f"   📰 {len(news_items)} news items collected")
@@ -1011,75 +1208,17 @@ def main():
         "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}}
     }
     
-    # Configuration - use environment variables for production
-    config = {
-        'news_api_key': os.getenv('NEWS_API_KEY', 'cc793418193f491d9184ad7b00785f37'),
-        'slack': {
-            'enabled': True,
-            'webhook_url': os.getenv('SLACK_WEBHOOK_URL', 'YOUR_SLACK_WEBHOOK_URL')
-        },
-        'email': {
-            'enabled': True,
-            'smtp_server': 'smtp.gmail.com',
-            'smtp_port': 587,
-            'from_email': os.getenv('EMAIL_FROM', 'robin.langeard@gmail.com'),
-            'to_email': os.getenv('EMAIL_TO', 'robin.langeard@gmail.com'),
-            'password': os.getenv('EMAIL_PASSWORD', 'YOUR_GMAIL_APP_PASSWORD')
-        },
-        'stocks': default_stocks,
-        'crypto': {
-            'SOL': {
-                'name': 'Solana',
-                'thresholds': {
-                    'high': float(os.getenv('SOL_HIGH', '180.0')),
-                    'low': float(os.getenv('SOL_LOW', '90.0')),
-                    'change_percent': float(os.getenv('SOL_CHANGE', '10.0'))
-                }
-            }
-        }
-    }
-    
-    monitor = FinanceMonitor(config)
-    
-    # Check if we're running as a one-time task or continuous service
-    run_mode = os.getenv('RUN_MODE', 'continuous')
-    
-    if run_mode == 'continuous':
-        # Schedule monitoring every 20 minutes
-        schedule.every(20).minutes.do(monitor.monitor_assets)
-        
-        logger.info("🚀 Financial Monitor Bot started in CONTINUOUS mode (Yahoo Finance Edition)")
-        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks via Yahoo Finance (with EUR conversion) + {len(config['crypto'])} cryptocurrencies")
-        logger.info("📱 Slack alerts for urgent notifications")
-        logger.info("📧 Daily email reports around 10:00 and 18:00 Paris time (sent during regular monitoring)")
-        logger.info(f"🏢 Portfolio: {len(default_stocks)} French stocks")
-        
-        # Test email configuration on first startup
-        logger.info("🧪 Testing email configuration...")
-        if monitor.test_email_configuration():
-            logger.info("✅ Email test successful - you should receive a test email shortly")
-        else:
-            logger.warning("❌ Email test failed - check your Gmail App Password configuration")
-        
-        # Run once immediately
-        monitor.monitor_assets()
-        
-        # Keep running
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
-            
-    else:
-        # Single execution mode (for limited platforms like PythonAnywhere)
-        paris_now = datetime.now(pytz.timezone('Europe/Paris'))
-        
-        logger.info(f"🤖 Daily Financial Monitor Execution (Single Run Mode - Yahoo Finance)")
-        logger.info(f"⏰ Running at {paris_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        
-        # Always run monitoring (which will check if daily reports are needed)
-        monitor.monitor_assets()
-        
-        logger.info("✅ Single execution completed")
-
-if __name__ == "__main__":
-    main()
+    # ALL CRYPTOCURRENCIES from your list with reasonable default thresholds
+    default_crypto = {
+        'ETH': {'name': 'Ethereum', 'thresholds': {'high': 4000.0, 'low': 2000.0, 'change_percent': 8.0}},
+        'SOL': {'name': 'Solana', 'thresholds': {'high': 180.0, 'low': 90.0, 'change_percent': 10.0}},
+        'DOGE': {'name': 'Dogecoin', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
+        'ADA': {'name': 'Cardano', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 12.0}},
+        'LINK': {'name': 'Chainlink', 'thresholds': {'high': 30.0, 'low': 10.0, 'change_percent': 12.0}},
+        'ZEC': {'name': 'Zcash', 'thresholds': {'high': 100.0, 'low': 30.0, 'change_percent': 15.0}},
+        'PEPE': {'name': 'Pepe', 'thresholds': {'high': 0.00003, 'low': 0.000005, 'change_percent': 20.0}},
+        'UNI': {'name': 'Uniswap', 'thresholds': {'high': 15.0, 'low': 5.0, 'change_percent': 15.0}},
+        'CRO': {'name': 'Cronos', 'thresholds': {'high': 0.2, 'low': 0.05, 'change_percent': 15.0}},
+        'MNT': {'name': 'Mantle', 'thresholds': {'high': 1.5, 'low': 0.5, 'change_percent': 15.0}},
+        'RENDER': {'name': 'Render', 'thresholds': {'high': 10.0, 'low': 3.0, 'change_percent': 15.0}},
+        'FET': {'name': 'Artificial Superintelligence Alliance', 'thresholds': {'high': 2.0, 'low': 0.5
