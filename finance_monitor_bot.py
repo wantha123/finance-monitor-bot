@@ -1,8 +1,110 @@
-#!/usr/bin/env python3
+def send_notification(self, subject: str, message: str, notification_type: str = "alert"):
+        """Send notification via configured method"""
+        if notification_type == "daily_report":
+            # Daily reports go to email with HTML formatting
+            self.send_email_notification(subject, message, use_html=True)
+        else:
+            # Alerts go to Slack
+            self.send_slack_notification(message)
+    
+    def get_daily_summary(self) -> Dict:
+        """Get daily summary of prices and changes for all assets"""
+        summary = {
+            'stock_data': {},
+            'crypto_data': {},
+            'market_status': [],
+            'daily_changes': {}
+        }
+        
+        # Check market status
+        if self.is_euronext_open():
+            summary['market_status'].append("🟢 Euronext Paris: OPEN")
+        else:
+            next_open = self.get_next_market_open()
+            summary['market_status'].append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
+        
+        summary['market_status'].append("🟢 Crypto Markets: ALWAYS OPEN")
+        
+        # Get current prices for all stocks
+        stock_symbols = self.config.get('stocks', {})
+        for symbol, stock_config in stock_symbols.items():
+            data = self.get_stock_price(symbol)
+            if data:
+                summary['stock_data'][symbol] = data
+        
+        # Get current prices for all crypto (in one efficient API call)
+        all_crypto_data = self.get_all_crypto_prices()
+        summary['crypto_data'] = all_crypto_data
+        
+        # Get daily changes from database
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get prices from 24 hours ago
+        yesterday = datetime.now() - timedelta(days=1)
+        
+        # Check all tracked symbols
+        all_symbols = list(stock_symbols.keys()) + list(all_crypto_data.keys())
+        for symbol in all_symbols:
+            cursor.execute('''
+                SELECT price FROM price_history 
+                WHERE symbol = ? AND timestamp >= ? 
+                ORDER BY timestamp ASC LIMIT 1
+            ''', (symbol, yesterday.isoformat()))
+            
+            result = cursor.fetchone()
+            if result:
+                old_price = result[0]
+                current_price = None
+                
+                # Get current price
+                if symbol in summary['stock_data']:
+                    current_price = summary['stock_data'][symbol]['current_price']
+                elif symbol in summary['crypto_data']:
+                    current_price = summary['crypto_data'][symbol]['current_price_eur']
+                
+                if current_price:
+                    change = ((current_price - old_price) / old_price) * 100
+                    asset_name = stock_symbols.get(symbol, {}).get('name', 
+                                  self.config.get('crypto', {}).get(symbol, {}).get('name', symbol))
+                    summary['daily_changes'][symbol] = {
+                        'name': asset_name,
+                        'old_price': old_price,
+                        'current_price': current_price,
+                        'change_percent': change
+                    }
+        
+        conn.close()
+        return summary
+    
+    def send_daily_report(self, report_type: str = "morning"):
+        """Send enhanced daily email report"""
+        logger.info(f"Generating enhanced {report_type} daily report...")
+        
+        summary = self.get_daily_summary()
+        paris_time = datetime.now(self.paris_tz)
+        
+        if report_type == "morning":
+            subject = f"🌅 Morning Financial Report - {paris_time.strftime('%Y-%m-%d')}"
+        else:  # evening
+            subject = f"🌆 Evening Financial Report - {paris_time.strftime('%Y-%m-%d')}"
+        
+        # Create enhanced report
+        html_content, plain_text = self.create_enhanced_daily_report(summary, report_type)
+        
+        # For HTML emails, we pass the HTML content which will be properly formatted
+        # The create_html_email method will wrap it in the full HTML template
+        self.send_notification(subject, html_content, notification_type="daily_report")
+        
+        # Record that we sent this report
+        self.record_report_sent(report_type)
+        
+        logger.info(f"Enhanced {report_type} daily report sent")#!/usr/bin/env python3
 """
 Financial & Crypto Monitoring Bot
 Monitors 37 French stocks and 60+ cryptocurrencies with news alerts
 Uses Yahoo Finance with automatic EUR conversion
+Enhanced with professional UI/UX design and visual clarity
 """
 
 import requests
@@ -545,8 +647,46 @@ class FinanceMonitor:
         
         return {}
     
+    def format_price_change_display(self, asset_name: str, symbol: str, current_price: float, 
+                                   previous_price: float, change_percent: float, asset_type: str = "stock") -> str:
+        """Format price change with clear before/after display and visual indicators"""
+        
+        # Determine direction and color indicators
+        if change_percent > 0:
+            direction_emoji = "📈"
+            change_indicator = "GAIN"
+            trend_symbol = "▲"
+        elif change_percent < 0:
+            direction_emoji = "📉"
+            change_indicator = "LOSS" 
+            trend_symbol = "▼"
+        else:
+            direction_emoji = "➡️"
+            change_indicator = "FLAT"
+            trend_symbol = "━"
+        
+        # Asset type emoji
+        type_emoji = "🏢" if asset_type == "stock" else "🪙"
+        
+        # Price formatting based on value
+        if current_price >= 1:
+            price_format = ".2f"
+        elif current_price >= 0.01:
+            price_format = ".4f"
+        else:
+            price_format = ".6f"
+        
+        # Create clear before/after display
+        formatted_display = (
+            f"{direction_emoji} {type_emoji} {asset_name} ({symbol})\n"
+            f"   💰 BEFORE: €{previous_price:{price_format}} → AFTER: €{current_price:{price_format}}\n"
+            f"   {trend_symbol} {change_indicator}: {change_percent:+.2f}%"
+        )
+        
+        return formatted_display
+    
     def check_price_alerts(self, symbol: str, current_price: float, thresholds: Dict) -> List[str]:
-        """Check if price alerts should be triggered"""
+        """Check if price alerts should be triggered with enhanced formatting"""
         alerts = []
         
         # Get previous price from database
@@ -567,16 +707,34 @@ class FinanceMonitor:
         else:
             change_percent = 0
         
-        # Check thresholds
+        # Get asset info for better display
+        asset_name = symbol
+        asset_type = "crypto"
+        if symbol in self.config.get('stocks', {}):
+            asset_name = self.config['stocks'][symbol]['name']
+            asset_type = "stock"
+        elif symbol in self.config.get('crypto', {}):
+            asset_name = self.config['crypto'][symbol]['name']
+            asset_type = "crypto"
+        
+        # Check thresholds with enhanced formatting
         if current_price >= thresholds.get('high', float('inf')):
-            alerts.append(f"🔴 {symbol} HIGH ALERT: Price reached €{current_price:.2f} (threshold: €{thresholds['high']:.2f})")
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"🔴 HIGH THRESHOLD REACHED\n{alert}")
         
         if current_price <= thresholds.get('low', 0):
-            alerts.append(f"🔵 {symbol} LOW ALERT: Price dropped to €{current_price:.2f} (threshold: €{thresholds['low']:.2f})")
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"🔵 LOW THRESHOLD REACHED\n{alert}")
         
         if abs(change_percent) >= thresholds.get('change_percent', 10):
-            direction = "📈" if change_percent > 0 else "📉"
-            alerts.append(f"{direction} {symbol} MOVEMENT: {change_percent:+.2f}% change (€{prev_price:.2f} → €{current_price:.2f})")
+            alert = self.format_price_change_display(
+                asset_name, symbol, current_price, prev_price, change_percent, asset_type
+            )
+            alerts.append(f"⚡ SIGNIFICANT MOVEMENT\n{alert}")
         
         conn.close()
         return alerts
@@ -657,7 +815,7 @@ class FinanceMonitor:
     def test_email_configuration(self):
         """Test email configuration by sending a test message"""
         try:
-            subject = "🧪 Financial Monitor - Email Test"
+            subject = "🧪 Enhanced Financial Monitor - Email Test"
             message = """This is a test email from your Enhanced Financial Monitor Bot.
 
 If you receive this message, your email configuration is working correctly!
@@ -674,7 +832,7 @@ Your morning reports will be sent around 10:00 AM Paris time.
 Your evening reports will be sent around 6:00 PM Paris time.
 
 ---
-Enhanced Financial Monitor Bot
+Enhanced Financial Monitor Bot v2.0
 """
             
             self.send_email_notification(subject, message)
@@ -685,20 +843,250 @@ Enhanced Financial Monitor Bot
             logger.error(f"❌ Email test failed: {e}")
             return False
     
-    def send_email_notification(self, subject: str, message: str):
-        """Send email notification"""
+    def create_html_email(self, subject: str, content: str, report_type: str = None) -> str:
+        """Create professional HTML email with enhanced formatting"""
+        paris_time = datetime.now(self.paris_tz)
+        
+        # Parse content to create structured HTML
+        html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }}
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 28px;
+            font-weight: 600;
+        }}
+        .header p {{
+            margin: 10px 0 0 0;
+            opacity: 0.9;
+        }}
+        .content {{
+            padding: 30px;
+        }}
+        .section {{
+            margin: 25px 0;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+            background: #f8f9fa;
+            border-radius: 5px;
+        }}
+        .section h2 {{
+            margin-top: 0;
+            color: #333;
+            font-size: 20px;
+        }}
+        .asset-grid {{
+            display: grid;
+            gap: 10px;
+            margin: 15px 0;
+        }}
+        .asset-row {{
+            padding: 12px;
+            background: white;
+            border-radius: 5px;
+            border-left: 3px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s ease;
+        }}
+        .asset-row:hover {{
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }}
+        .asset-row.gain {{
+            border-left-color: #28a745;
+            background: #f0fff4;
+        }}
+        .asset-row.loss {{
+            border-left-color: #dc3545;
+            background: #fff5f5;
+        }}
+        .asset-info {{
+            flex: 1;
+        }}
+        .asset-name {{
+            font-weight: 600;
+            color: #333;
+        }}
+        .asset-symbol {{
+            color: #6c757d;
+            font-size: 14px;
+        }}
+        .asset-price {{
+            text-align: right;
+        }}
+        .price-value {{
+            font-family: 'Courier New', monospace;
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }}
+        .price-change {{
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 4px;
+        }}
+        .gain .price-change {{
+            color: #28a745;
+        }}
+        .loss .price-change {{
+            color: #dc3545;
+        }}
+        .neutral .price-change {{
+            color: #6c757d;
+        }}
+        .stats-box {{
+            background: #e7f3ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: center;
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 15px;
+        }}
+        .stat-item {{
+            text-align: center;
+        }}
+        .stat-value {{
+            font-size: 24px;
+            font-weight: 600;
+            color: #667eea;
+        }}
+        .stat-label {{
+            font-size: 14px;
+            color: #6c757d;
+            margin-top: 5px;
+        }}
+        .alert-box {{
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 5px;
+        }}
+        .alert-box.high {{
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }}
+        .alert-box.low {{
+            background: #d1ecf1;
+            border-left-color: #17a2b8;
+        }}
+        .news-item {{
+            padding: 15px;
+            border-bottom: 1px solid #dee2e6;
+        }}
+        .news-item:last-child {{
+            border-bottom: none;
+        }}
+        .news-title {{
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }}
+        .news-meta {{
+            font-size: 14px;
+            color: #6c757d;
+        }}
+        .footer {{
+            background: #343a40;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }}
+        .footer p {{
+            margin: 5px 0;
+            opacity: 0.9;
+        }}
+        .emoji {{
+            font-size: 1.2em;
+            margin-right: 5px;
+        }}
+        @media (max-width: 600px) {{
+            .stats-grid {{
+                grid-template-columns: 1fr;
+            }}
+            .asset-row {{
+                flex-direction: column;
+                text-align: center;
+            }}
+            .asset-price {{
+                margin-top: 10px;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{subject}</h1>
+            <p>📅 {paris_time.strftime('%A, %B %d, %Y')} | 🕐 {paris_time.strftime('%H:%M %Z')}</p>
+        </div>
+        <div class="content">
+            {content}
+        </div>
+        <div class="footer">
+            <p><strong>🤖 Enhanced Financial Monitor v2.0</strong></p>
+            <p>📊 Monitoring {len(self.config.get('stocks', {}))} French Stocks + {len(self.config.get('crypto', {}))} Cryptocurrencies</p>
+            <p>💱 All prices in EUR | 📈 Real-time data from Yahoo Finance & CoinGecko</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+        return html_content
+    
+    def send_email_notification(self, subject: str, message: str, use_html: bool = True):
+        """Send enhanced email notification with HTML formatting"""
         try:
             email_config = self.config.get('email', {})
             if not email_config.get('enabled', False):
                 logger.info(f"Email disabled. Would send: {subject}")
                 return
             
-            msg = MIMEMultipart()
+            msg = MIMEMultipart('alternative')
             msg['From'] = email_config['from_email']
             msg['To'] = email_config['to_email']
             msg['Subject'] = subject
             
-            msg.attach(MIMEText(message, 'plain'))
+            # Always attach plain text version
+            text_part = MIMEText(message, 'plain', 'utf-8')
+            msg.attach(text_part)
+            
+            # Add HTML version if enabled
+            if use_html:
+                html_content = self.create_html_email(subject, message)
+                html_part = MIMEText(html_content, 'html', 'utf-8')
+                msg.attach(html_part)
             
             server = smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port'])
             server.starttls()
@@ -707,12 +1095,12 @@ Enhanced Financial Monitor Bot
             server.sendmail(email_config['from_email'], email_config['to_email'], text)
             server.quit()
             
-            logger.info(f"Email sent: {subject}")
+            logger.info(f"Enhanced email sent: {subject}")
         except Exception as e:
             logger.error(f"Error sending email: {e}")
     
     def send_slack_notification(self, message: str):
-        """Send notification to Slack"""
+        """Send notification to Slack with enhanced formatting"""
         try:
             slack_config = self.config.get('slack', {})
             if not slack_config.get('enabled', False):
@@ -724,16 +1112,31 @@ Enhanced Financial Monitor Bot
                 logger.error("Slack webhook URL not configured")
                 return
             
-            # Format message for Slack
+            # Parse message to extract alerts
+            alerts_count = message.count("THRESHOLD REACHED") + message.count("SIGNIFICANT MOVEMENT")
+            
+            # Create enhanced Slack payload
             payload = {
-                "text": "📊 Financial Monitor Alert",
+                "text": f"🚨 Portfolio Alert - {alerts_count} notifications",
                 "blocks": [
                     {
                         "type": "header",
                         "text": {
                             "type": "plain_text",
-                            "text": "📊 Enhanced Financial Monitoring Report"
+                            "text": "🚨 Enhanced Portfolio Alert"
                         }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET | 📊 {len(self.config.get('stocks', {}))} Stocks + {len(self.config.get('crypto', {}))} Crypto"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "divider"
                     },
                     {
                         "type": "section",
@@ -743,11 +1146,14 @@ Enhanced Financial Monitor Bot
                         }
                     },
                     {
+                        "type": "divider"
+                    },
+                    {
                         "type": "context",
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
+                                "text": "🤖 Enhanced Financial Monitor | 🔄 Next check in 20min | 📧 Reports at 10:00 & 18:00 CET"
                             }
                         ]
                     }
@@ -757,123 +1163,37 @@ Enhanced Financial Monitor Bot
             response = requests.post(webhook_url, json=payload, timeout=10)
             response.raise_for_status()
             
-            logger.info("Slack notification sent successfully")
+            logger.info("Enhanced Slack notification sent successfully")
             
         except Exception as e:
             logger.error(f"Error sending Slack notification: {e}")
     
-    def send_notification(self, subject: str, message: str, notification_type: str = "alert"):
-        """Send notification via configured method"""
-        full_message = f"{subject}\n\n{message}"
-        
-        if notification_type == "daily_report":
-            # Daily reports go to email
-            self.send_email_notification(subject, message)
-        else:
-            # Alerts go to Slack
-            self.send_slack_notification(full_message)
-    
-    def get_daily_summary(self) -> Dict:
-        """Get daily summary of prices and changes for all assets"""
-        summary = {
-            'stock_data': {},
-            'crypto_data': {},
-            'market_status': [],
-            'daily_changes': {}
-        }
-        
-        # Check market status
-        if self.is_euronext_open():
-            summary['market_status'].append("🟢 Euronext Paris: OPEN")
-        else:
-            next_open = self.get_next_market_open()
-            summary['market_status'].append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
-        
-        summary['market_status'].append("🟢 Crypto Markets: ALWAYS OPEN")
-        
-        # Get current prices for all stocks
-        stock_symbols = self.config.get('stocks', {})
-        for symbol, stock_config in stock_symbols.items():
-            data = self.get_stock_price(symbol)
-            if data:
-                summary['stock_data'][symbol] = data
-        
-        # Get current prices for all crypto (in one efficient API call)
-        all_crypto_data = self.get_all_crypto_prices()
-        summary['crypto_data'] = all_crypto_data
-        
-        # Get daily changes from database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Get prices from 24 hours ago
-        yesterday = datetime.now() - timedelta(days=1)
-        
-        # Check all tracked symbols
-        all_symbols = list(stock_symbols.keys()) + list(all_crypto_data.keys())
-        for symbol in all_symbols:
-            cursor.execute('''
-                SELECT price FROM price_history 
-                WHERE symbol = ? AND timestamp >= ? 
-                ORDER BY timestamp ASC LIMIT 1
-            ''', (symbol, yesterday.isoformat()))
-            
-            result = cursor.fetchone()
-            if result:
-                old_price = result[0]
-                current_price = None
-                
-                # Get current price
-                if symbol in summary['stock_data']:
-                    current_price = summary['stock_data'][symbol]['current_price']
-                elif symbol in summary['crypto_data']:
-                    current_price = summary['crypto_data'][symbol]['current_price_eur']
-                
-                if current_price:
-                    change = ((current_price - old_price) / old_price) * 100
-                    asset_name = stock_symbols.get(symbol, {}).get('name', 
-                                  self.config.get('crypto', {}).get(symbol, {}).get('name', symbol))
-                    summary['daily_changes'][symbol] = {
-                        'name': asset_name,
-                        'old_price': old_price,
-                        'current_price': current_price,
-                        'change_percent': change
-                    }
-        
-        conn.close()
-        return summary
-    
-    def send_daily_report(self, report_type: str = "morning"):
-        """Send daily email report"""
-        logger.info(f"Generating {report_type} daily report...")
-        
-        summary = self.get_daily_summary()
+    def create_enhanced_daily_report(self, summary: Dict, report_type: str = "morning") -> str:
+        """Create enhanced daily report with professional formatting"""
         paris_time = datetime.now(self.paris_tz)
         
+        # Header
         if report_type == "morning":
-            subject = f"🌅 Morning Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-            greeting = "Good morning! Here's your financial market update:"
-        else:  # evening
-            subject = f"🌆 Evening Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-            greeting = "Good evening! Here's your end-of-day financial summary:"
+            header_emoji = "🌅"
+            greeting = "Good morning! Here's your enhanced financial market update:"
+        else:
+            header_emoji = "🌆"
+            greeting = "Good evening! Here's your enhanced end-of-day financial summary:"
         
-        message = f"{greeting}\n\n"
-        message += "=" * 60 + "\n"
-        message += f"📅 ENHANCED DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
-        message += f"🕐 Generated at: {paris_time.strftime('%H:%M %Z')}\n"
-        message += f"📊 Coverage: {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
-        message += "=" * 60 + "\n\n"
+        # Start building HTML content
+        html_sections = []
         
-        # Market status
-        message += "📊 MARKET STATUS:\n"
+        # Market Status Section
+        market_status_html = '<div class="section"><h2>📊 Market Status</h2>'
         for status in summary['market_status']:
-            message += f"  {status}\n"
-        message += "\n"
+            if "OPEN" in status:
+                market_status_html += f'<p style="color: #28a745; font-weight: bold;">✅ {status}</p>'
+            else:
+                market_status_html += f'<p style="color: #dc3545; font-weight: bold;">❌ {status}</p>'
+        market_status_html += '</div>'
+        html_sections.append(market_status_html)
         
-        # Current prices - separate stocks and crypto
-        message += "💰 CURRENT PRICES:\n\n"
-        
-        # Show top performing and worst performing assets
+        # Portfolio Performance Section
         all_assets = []
         
         # Add stocks
@@ -900,569 +1220,115 @@ Enhanced Financial Monitor Bot
                 'category': 'crypto'
             })
         
-        # Sort by change percentage (best to worst)
+        # Sort by change percentage
         all_assets.sort(key=lambda x: x['change'], reverse=True)
         
-        # Show top 5 performers and bottom 5
-        message += "  📈 TOP PERFORMERS (All Assets):\n"
+        # Top Performers Section
+        top_performers_html = '<div class="section"><h2>📈 Top Performers</h2><div class="asset-grid">'
         for asset in all_assets[:5]:
-            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
+            change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
+            top_performers_html += f'''
+                <div class="asset-row {change_class}">
+                    <div class="asset-info">
+                        <div class="asset-name">{asset['type']} {asset['name']}</div>
+                        <div class="asset-symbol">{asset['symbol']}</div>
+                    </div>
+                    <div class="asset-price">
+                        <div class="price-value">€{asset['price']:.4f}</div>
+                        <div class="price-change">{asset['change']:+.2f}%</div>
+                    </div>
+                </div>
+            '''
+        top_performers_html += '</div></div>'
+        html_sections.append(top_performers_html)
         
-        message += "\n  📉 WORST PERFORMERS (All Assets):\n"
+        # Worst Performers Section
+        worst_performers_html = '<div class="section"><h2>📉 Worst Performers</h2><div class="asset-grid">'
         for asset in all_assets[-5:]:
-            message += f"    {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
+            change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
+            worst_performers_html += f'''
+                <div class="asset-row {change_class}">
+                    <div class="asset-info">
+                        <div class="asset-name">{asset['type']} {asset['name']}</div>
+                        <div class="asset-symbol">{asset['symbol']}</div>
+                    </div>
+                    <div class="asset-price">
+                        <div class="price-value">€{asset['price']:.4f}</div>
+                        <div class="price-change">{asset['change']:+.2f}%</div>
+                    </div>
+                </div>
+            '''
+        worst_performers_html += '</div></div>'
+        html_sections.append(worst_performers_html)
         
-        message += "\n"
-        
-        # Separate stock and crypto performance
-        stocks_only = [a for a in all_assets if a['category'] == 'stock']
-        crypto_only = [a for a in all_assets if a['category'] == 'crypto']
-        
-        if stocks_only:
-            message += f"🏢 STOCK PERFORMANCE (Top 3):\n"
-            for asset in stocks_only[:3]:
-                message += f"  📈 {asset['name']}: €{asset['price']:.2f} ({asset['change']:+.2f}%)\n"
-            message += "\n"
-        
-        if crypto_only:
-            message += f"🪙 CRYPTO PERFORMANCE (Top 5):\n"
-            for asset in crypto_only[:5]:
-                message += f"  🚀 {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
-            message += "\n"
-        
-        # Daily changes (if available)
-        if summary['daily_changes']:
-            message += "📈 24-HOUR CHANGES (Biggest Movers):\n"
-            
-            # Sort by absolute change percentage
-            changes_sorted = sorted(summary['daily_changes'].items(), 
-                                  key=lambda x: abs(x[1]['change_percent']), reverse=True)
-            
-            for symbol, change_data in changes_sorted[:10]:  # Show top 10 changes
-                direction = "📈" if change_data['change_percent'] > 0 else "📉" if change_data['change_percent'] < 0 else "➡️"
-                message += f"  {direction} {change_data['name']}: {change_data['change_percent']:+.2f}% "
-                message += f"(€{change_data['old_price']:.4f} → €{change_data['current_price']:.4f})\n"
-            message += "\n"
-        
-        # Portfolio statistics
+        # Portfolio Statistics
         if all_assets:
             total_assets = len(all_assets)
             gainers = len([a for a in all_assets if a['change'] > 0])
             losers = len([a for a in all_assets if a['change'] < 0])
             unchanged = total_assets - gainers - losers
             
-            message += "📊 PORTFOLIO STATISTICS:\n"
-            message += f"  📈 Gainers: {gainers} ({gainers/total_assets*100:.1f}%)\n"
-            message += f"  📉 Losers: {losers} ({losers/total_assets*100:.1f}%)\n"
-            message += f"  ➡️ Unchanged: {unchanged} ({unchanged/total_assets*100:.1f}%)\n"
-            message += f"  📊 Total Assets: {total_assets} ({len(stocks_only)} stocks + {len(crypto_only)} crypto)\n\n"
+            stats_html = f'''
+                <div class="stats-box">
+                    <h2>📊 Portfolio Statistics</h2>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">{gainers}</div>
+                            <div class="stat-label">📈 Gainers ({gainers/total_assets*100:.1f}%)</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">{losers}</div>
+                            <div class="stat-label">📉 Losers ({losers/total_assets*100:.1f}%)</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">{unchanged}</div>
+                            <div class="stat-label">➡️ Unchanged ({unchanged/total_assets*100:.1f}%)</div>
+                        </div>
+                    </div>
+                </div>
+            '''
+            html_sections.append(stats_html)
         
-        # Recent news - focus on top assets and crypto
-        priority_assets = ['OVH.PA', 'STMPA.PA', 'STLAP.PA']  # Most important stocks
-        priority_crypto = ['ETH', 'SOL', 'DOGE', 'ADA']  # Major crypto
-        news_found = False
+        # Combine all sections
+        content_html = '\n'.join(html_sections)
         
-        # Stock news
-        for symbol in priority_assets:
-            if symbol in self.config.get('stocks', {}):
-                stock_config = self.config['stocks'][symbol]
-                news_items = self.get_news(f"{stock_config['name']} stock")
-                if news_items:
-                    if not news_found:
-                        message += "📰 PORTFOLIO NEWS (Last 24h):\n"
-                        news_found = True
-                    for news in news_items[:1]:  # Limit to 1 article per major stock
-                        message += f"  🏢 {stock_config['name']}: {news.title}\n"
-                        message += f"    {news.source} | {news.url}\n"
+        # Also create plain text version
+        plain_text = f"{greeting}\n\n"
+        plain_text += "=" * 60 + "\n"
+        plain_text += f"📅 ENHANCED DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
+        plain_text += f"🕐 Generated at: {paris_time.strftime('%H:%M %Z')}\n"
+        plain_text += f"📊 Coverage: {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
+        plain_text += "=" * 60 + "\n\n"
         
-        # Crypto news
-        for symbol in priority_crypto:
-            if symbol in self.config.get('crypto', {}):
-                crypto_config = self.config['crypto'][symbol]
-                news_items = self.get_news(f"{crypto_config['name']} cryptocurrency")
-                if news_items:
-                    if not news_found:
-                        message += "📰 PORTFOLIO NEWS (Last 24h):\n"
-                        news_found = True
-                    for news in news_items[:1]:  # Limit to 1 article per major crypto
-                        message += f"  🪙 {crypto_config['name']}: {news.title}\n"
-                        message += f"    {news.source} | {news.url}\n"
+        # Add market status
+        plain_text += "📊 MARKET STATUS:\n"
+        for status in summary['market_status']:
+            plain_text += f"  {status}\n"
+        plain_text += "\n"
         
-        if news_found:
-            message += "\n"
+        # Add top performers
+        plain_text += "📈 TOP PERFORMERS:\n"
+        for asset in all_assets[:5]:
+            plain_text += f"  {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
+        plain_text += "\n"
+        
+        # Add worst performers
+        plain_text += "📉 WORST PERFORMERS:\n"
+        for asset in all_assets[-5:]:
+            plain_text += f"  {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
+        plain_text += "\n"
+        
+        # Add statistics
+        if all_assets:
+            plain_text += "📊 PORTFOLIO STATISTICS:\n"
+            plain_text += f"  📈 Gainers: {gainers} ({gainers/total_assets*100:.1f}%)\n"
+            plain_text += f"  📉 Losers: {losers} ({losers/total_assets*100:.1f}%)\n"
+            plain_text += f"  ➡️ Unchanged: {unchanged} ({unchanged/total_assets*100:.1f}%)\n"
+            plain_text += f"  📊 Total Assets: {total_assets}\n\n"
         
         # Footer
-        message += "=" * 60 + "\n"
-        message += "🤖 Enhanced Financial Monitor (Yahoo Finance + CoinGecko) | Next report: "
-        if report_type == "morning":
-            message += "around 18:00 CET"
-        else:
-            message += "around 10:00 CET tomorrow"
-        message += f"\n💡 Monitoring {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
-        message += "=" * 60
+        plain_text += "=" * 60 + "\n"
+        plain_text += "🤖 Enhanced Financial Monitor v2.0\n"
+        plain_text += "=" * 60
         
-        # Send email report
-        self.send_notification(subject, message, notification_type="daily_report")
-        
-        # Record that we sent this report
-        self.record_report_sent(report_type)
-        
-        logger.info(f"{report_type.capitalize()} daily report sent")
-    
-    def should_send_daily_report(self) -> Optional[str]:
-        """Check if it's time to send a daily report"""
-        paris_now = datetime.now(self.paris_tz)
-        current_hour = paris_now.hour
-        current_minute = paris_now.minute
-        today = paris_now.date()
-        
-        # Morning report window: 9:30 AM - 10:30 AM
-        if 9 <= current_hour <= 10 and current_minute >= 30 if current_hour == 9 else current_hour == 10 and current_minute <= 30:
-            if not self.has_sent_report_today('morning', today):
-                return 'morning'
-        
-        # Evening report window: 5:30 PM - 6:30 PM
-        if 17 <= current_hour <= 18 and current_minute >= 30 if current_hour == 17 else current_hour == 18 and current_minute <= 30:
-            if not self.has_sent_report_today('evening', today):
-                return 'evening'
-        
-        return None
-    
-    def monitor_assets(self):
-        """Main monitoring function for multiple assets"""
-        logger.info("Starting comprehensive asset monitoring cycle...")
-        
-        # Check if we should send a daily report during this monitoring cycle
-        report_type = self.should_send_daily_report()
-        if report_type:
-            logger.info(f"📧 Time for {report_type} daily report!")
-            self.send_daily_report(report_type)
-        
-        alerts = []
-        market_status = []
-        stock_data = {}
-        crypto_data = {}
-        
-        # Check market status
-        if self.is_euronext_open():
-            market_status.append("🟢 Euronext Paris: OPEN")
-        else:
-            next_open = self.get_next_market_open()
-            market_status.append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
-        
-        market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
-        
-        # Monitor all stocks from configuration
-        stock_symbols = self.config.get('stocks', {})
-        logger.info(f"Monitoring {len(stock_symbols)} stocks via Yahoo Finance...")
-        
-        for symbol, stock_config in stock_symbols.items():
-            try:
-                data = self.get_stock_price(symbol)
-                if data:
-                    # Store price data
-                    self.store_price_data(symbol, data['current_price'], 'stock')
-                    
-                    # Check alerts
-                    thresholds = stock_config.get('thresholds', {})
-                    stock_alerts = self.check_price_alerts(symbol, data['current_price'], thresholds)
-                    alerts.extend(stock_alerts)
-                    
-                    # Store for reporting
-                    stock_data[symbol] = data
-                    
-                    logger.info(f"{stock_config['name']} ({symbol}): €{data['current_price']:.2f} ({data['change_percent']:+.2f}%)")
-                elif symbol.endswith('.PA') and not self.is_euronext_open():
-                    logger.info(f"{stock_config['name']} ({symbol}): Market closed")
-                else:
-                    logger.warning(f"Failed to get data for {symbol}")
-                    
-            except Exception as e:
-                logger.error(f"Error monitoring {symbol}: {e}")
-                continue
-        
-        # Monitor all cryptocurrencies (efficient bulk fetch)
-        crypto_symbols = self.config.get('crypto', {})
-        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies via CoinGecko...")
-        
-        try:
-            all_crypto_data = self.get_all_crypto_prices()
-            
-            for symbol, crypto_config in crypto_symbols.items():
-                if symbol in all_crypto_data:
-                    data = all_crypto_data[symbol]
-                    
-                    # Store EUR price in database
-                    if data['current_price_eur']:
-                        self.store_price_data(symbol, data['current_price_eur'], 'crypto')
-                        
-                        thresholds = crypto_config.get('thresholds', {})
-                        crypto_alerts = self.check_price_alerts(symbol, data['current_price_eur'], thresholds)
-                        alerts.extend(crypto_alerts)
-                        
-                        # Store for reporting
-                        crypto_data[symbol] = data
-                        
-                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.4f} ({data['change_percent_24h']:+.2f}%)")
-                    else:
-                        logger.warning(f"No EUR price available for {symbol}")
-                else:
-                    logger.warning(f"No data returned for {symbol}")
-                    
-        except Exception as e:
-            logger.error(f"Error monitoring cryptocurrencies: {e}")
-        
-        # Get news - highly optimized for large portfolio
-        current_minute = datetime.now().minute
-        should_check_news = (
-            self.is_euronext_open() and current_minute == 0  # Only once per hour during market hours
-        )
-        
-        news_items = []
-        if should_check_news:
-            logger.info("Checking news for priority assets (API optimized)...")
-            # Only check news for top assets to save API calls
-            priority_stocks = ['OVH.PA', 'STMPA.PA', 'STLAP.PA', 'MT.PA', 'ENGI.PA']
-            priority_crypto = ['ETH', 'SOL', 'DOGE']
-            
-            # Stock news
-            for symbol in priority_stocks:
-                if symbol in stock_data:
-                    stock_config = stock_symbols[symbol]
-                    try:
-                        news_query = f"{stock_config['name']} stock"
-                        symbol_news = self.get_news(news_query)
-                        if symbol_news:
-                            news_items.extend(symbol_news[:1])  # Max 1 news per stock
-                    except Exception as e:
-                        logger.warning(f"News fetch failed for {symbol}: {e}")
-                        continue
-            
-            # Crypto news
-            for symbol in priority_crypto:
-                if symbol in crypto_data:
-                    crypto_config = crypto_symbols[symbol]
-                    try:
-                        news_query = f"{crypto_config['name']} cryptocurrency"
-                        symbol_news = self.get_news(news_query)
-                        if symbol_news:
-                            news_items.extend(symbol_news[:1])  # Max 1 news per crypto
-                    except Exception as e:
-                        logger.warning(f"News fetch failed for {symbol}: {e}")
-                        continue
-        else:
-            logger.info("Skipping news check (preserving API limits for large portfolio)")
-        
-        # Send notifications if there are alerts
-        if alerts:
-            subject = f"🚨 Portfolio Alert - {len(alerts)} notifications from enhanced portfolio"
-            
-            message = "=== ENHANCED PORTFOLIO MONITORING ALERT ===\n\n"
-            
-            # Market status
-            message += "📊 MARKET STATUS:\n"
-            for status in market_status:
-                message += f"  {status}\n"
-            message += "\n"
-            
-            # Price alerts
-            message += f"🚨 PRICE ALERTS ({len(alerts)}):\n"
-            for alert in alerts:
-                message += f"  {alert}\n"
-            message += "\n"
-            
-            # Portfolio performance summary
-            if stock_data or crypto_data:
-                message += "📈 PORTFOLIO PERFORMANCE:\n"
-                
-                # Combine and sort by absolute change
-                all_assets = []
-                for symbol, data in stock_data.items():
-                    all_assets.append((symbol, data, stock_symbols[symbol]['name'], 'stock'))
-                for symbol, data in crypto_data.items():
-                    all_assets.append((symbol, data, crypto_symbols[symbol]['name'], 'crypto'))
-                
-                # Sort by absolute change percentage
-                all_assets.sort(key=lambda x: abs(x[1].get('change_percent', x[1].get('change_percent_24h', 0))), reverse=True)
-                
-                # Show top 3 gainers and top 3 losers
-                message += "  🔥 TOP GAINERS:\n"
-                gainers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) > 0)][:3]
-                for symbol, data, name, type_asset in gainers:
-                    change = data.get('change_percent', data.get('change_percent_24h', 0))
-                    if type_asset == 'crypto':
-                        price = data['current_price_eur']
-                        message += f"    🪙 {name}: €{price:.4f} (+{change:.1f}%)\n"
-                    else:
-                        price = data['current_price']
-                        message += f"    🏢 {name}: €{price:.2f} (+{change:.1f}%)\n"
-                
-                message += "  🩸 TOP LOSERS:\n"
-                losers = [a for a in all_assets if (a[1].get('change_percent', a[1].get('change_percent_24h', 0)) < 0)][:3]
-                for symbol, data, name, type_asset in losers:
-                    change = data.get('change_percent', data.get('change_percent_24h', 0))
-                    if type_asset == 'crypto':
-                        price = data['current_price_eur']
-                        message += f"    🪙 {name}: €{price:.4f} ({change:.1f}%)\n"
-                    else:
-                        price = data['current_price']
-                        message += f"    🏢 {name}: €{price:.2f} ({change:.1f}%)\n"
-                message += "\n"
-            
-            # News (if any)
-            if news_items:
-                message += "📰 PRIORITY NEWS:\n"
-                for news in news_items[:3]:  # Max 3 news items
-                    message += f"  • {news.title} ({news.source})\n"
-                message += "\n"
-            
-            message += f"📊 Enhanced Portfolio: {len(stock_data)} stocks + {len(crypto_data)} crypto active\n"
-            message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET"
-            
-            self.send_notification(subject, message, notification_type="alert")
-        
-        # Summary logging
-        total_monitored = len([d for d in stock_data.values() if d]) + len([d for d in crypto_data.values() if d])
-        total_possible = len(stock_symbols) + len(crypto_symbols)
-        total_errors = total_possible - total_monitored
-        logger.info(f"📊 Enhanced monitoring cycle completed:")
-        logger.info(f"   ✅ {total_monitored}/{total_possible} assets successfully monitored")
-        logger.info(f"   🏢 {len(stock_data)} stocks active")
-        logger.info(f"   🪙 {len(crypto_data)} cryptocurrencies active")
-        logger.info(f"   ⚠️ {total_errors} assets failed/skipped") 
-        logger.info(f"   🚨 {len(alerts)} alerts generated")
-        logger.info(f"   📰 {len(news_items)} news items collected")
-
-def main():
-    # YOUR 37 SPECIFIC STOCKS - Update thresholds based on your investment strategy
-    default_stocks = {
-        # Tech & Gaming
-        "PARRO.PA": {"name": "Parrot", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "STMPA.PA": {"name": "STMicroelectronics", "thresholds": {"high": 35.0, "low": 15.0, "change_percent": 8.0}},
-        "ALCJ.PA": {"name": "CROSSJECT", "thresholds": {"high": 2.0, "low": 0.5, "change_percent": 20.0}},
-        "UBI.PA": {"name": "Ubisoft", "thresholds": {"high": 25.0, "low": 8.0, "change_percent": 12.0}},
-        "ALDNE.PA": {"name": "DON'T NOD", "thresholds": {"high": 30.0, "low": 10.0, "change_percent": 15.0}},
-        "ALLDL.PA": {"name": "Groupe LDLC", "thresholds": {"high": 60.0, "low": 30.0, "change_percent": 10.0}},
-        "ALLIX.PA": {"name": "Wallix Group SA", "thresholds": {"high": 20.0, "low": 5.0, "change_percent": 15.0}},
-        "DEEZR.PA": {"name": "Deezer SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        "AL2SI.PA": {"name": "2CRSi", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
-        
-        # Green Energy & Environment
-        "ALEUP.PA": {"name": "Europlasma", "thresholds": {"high": 1.0, "low": 0.05, "change_percent": 25.0}},
-        "ALDRV.PA": {"name": "Drone Volt SA", "thresholds": {"high": 0.5, "low": 0.05, "change_percent": 20.0}},
-        "ALHRS.PA": {"name": "Hydrogen Refueling Solutions", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        "ALDLT.PA": {"name": "Delta Drone SA", "thresholds": {"high": 1.0, "low": 0.1, "change_percent": 20.0}},
-        "ALLHY.PA": {"name": "Lhyfe SA", "thresholds": {"high": 15.0, "low": 5.0, "change_percent": 15.0}},
-        "ALCRB.PA": {"name": "Carbios", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "ARVEN.PA": {"name": "Arverne Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
-        "ALWTR.PA": {"name": "Osmosun SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        
-        # Healthcare & Biotech
-        "ALCAR.PA": {"name": "Carmat", "thresholds": {"high": 15.0, "low": 3.0, "change_percent": 15.0}},
-        "ALNFL.PA": {"name": "NFL Biosciences SA", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}},
-        "VALN.PA": {"name": "Valneva SE", "thresholds": {"high": 10.0, "low": 2.0, "change_percent": 15.0}},
-        
-        # Large Caps & Industrial
-        "OVH.PA": {"name": "OVH Groupe SAS", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 5.0}},
-        "ATO.PA": {"name": "Atos", "thresholds": {"high": 5.0, "low": 0.5, "change_percent": 15.0}},
-        "MT.PA": {"name": "ArcelorMittal", "thresholds": {"high": 30.0, "low": 15.0, "change_percent": 8.0}},
-        "ENGI.PA": {"name": "Engie", "thresholds": {"high": 18.0, "low": 10.0, "change_percent": 6.0}},
-        "STLAP.PA": {"name": "Stellantis", "thresholds": {"high": 20.0, "low": 8.0, "change_percent": 10.0}},
-        "EN.PA": {"name": "Bouygues", "thresholds": {"high": 40.0, "low": 25.0, "change_percent": 6.0}},
-        "CA.PA": {"name": "Carrefour", "thresholds": {"high": 18.0, "low": 12.0, "change_percent": 6.0}},
-        "FRVIA.PA": {"name": "Forvia", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
-        
-        # Services & Consumer
-        "KOF.PA": {"name": "Kaufman & Broad", "thresholds": {"high": 40.0, "low": 20.0, "change_percent": 10.0}},
-        "ETL.PA": {"name": "Eutelsat Communications", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
-        "ELIOR.PA": {"name": "Elior Group", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 12.0}},
-        "SBT.PA": {"name": "Œneo", "thresholds": {"high": 15.0, "low": 8.0, "change_percent": 10.0}},
-        "PLX.PA": {"name": "Pluxee NV", "thresholds": {"high": 30.0, "low": 20.0, "change_percent": 8.0}},
-        "CRI.PA": {"name": "Chargeurs", "thresholds": {"high": 20.0, "low": 10.0, "change_percent": 10.0}},
-        "ALVIN.PA": {"name": "Vinpai SA", "thresholds": {"high": 10.0, "low": 3.0, "change_percent": 15.0}},
-        "FDJ.PA": {"name": "FDJ (La Française des Jeux)", "thresholds": {"high": 40.0, "low": 30.0, "change_percent": 8.0}},
-        "ALLPL.PA": {"name": "Lepermislibre", "thresholds": {"high": 5.0, "low": 1.0, "change_percent": 20.0}}
-    }
-    
-    # ALL CRYPTOCURRENCIES from your list with reasonable default thresholds
-    default_crypto = {
-        'ETH': {'name': 'Ethereum', 'thresholds': {'high': 4000.0, 'low': 2000.0, 'change_percent': 8.0}},
-        'SOL': {'name': 'Solana', 'thresholds': {'high': 180.0, 'low': 90.0, 'change_percent': 10.0}},
-        'DOGE': {'name': 'Dogecoin', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
-        'ADA': {'name': 'Cardano', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 12.0}},
-        'LINK': {'name': 'Chainlink', 'thresholds': {'high': 30.0, 'low': 10.0, 'change_percent': 12.0}},
-        'ZEC': {'name': 'Zcash', 'thresholds': {'high': 100.0, 'low': 30.0, 'change_percent': 15.0}},
-        'PEPE': {'name': 'Pepe', 'thresholds': {'high': 0.00003, 'low': 0.000005, 'change_percent': 20.0}},
-        'UNI': {'name': 'Uniswap', 'thresholds': {'high': 15.0, 'low': 5.0, 'change_percent': 15.0}},
-        'CRO': {'name': 'Cronos', 'thresholds': {'high': 0.2, 'low': 0.05, 'change_percent': 15.0}},
-        'MNT': {'name': 'Mantle', 'thresholds': {'high': 1.5, 'low': 0.5, 'change_percent': 15.0}},
-        'RENDER': {'name': 'Render', 'thresholds': {'high': 10.0, 'low': 3.0, 'change_percent': 15.0}},
-        'FET': {'name': 'Artificial Superintelligence Alliance', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
-        'ARB': {'name': 'Arbitrum', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
-        'FIL': {'name': 'Filecoin', 'thresholds': {'high': 10.0, 'low': 3.0, 'change_percent': 15.0}},
-        'ALGO': {'name': 'Algorand', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
-        'MKR': {'name': 'Sky', 'thresholds': {'high': 2000.0, 'low': 800.0, 'change_percent': 12.0}},
-        'GRT': {'name': 'The Graph', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
-        'ENS': {'name': 'Ethereum Name Service', 'thresholds': {'high': 50.0, 'low': 15.0, 'change_percent': 15.0}},
-        'GALA': {'name': 'Gala', 'thresholds': {'high': 0.1, 'low': 0.02, 'change_percent': 20.0}},
-        'FLOW': {'name': 'Flow', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
-        'MANA': {'name': 'Decentraland', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 15.0}},
-        'STRK': {'name': 'Starknet', 'thresholds': {'high': 3.0, 'low': 1.0, 'change_percent': 15.0}},
-        'EIGEN': {'name': 'EigenLayer', 'thresholds': {'high': 10.0, 'low': 2.0, 'change_percent': 15.0}},
-        'EGLD': {'name': 'MultiversX', 'thresholds': {'high': 50.0, 'low': 20.0, 'change_percent': 12.0}},
-        'MOVE': {'name': 'Movement', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
-        'LPT': {'name': 'Livepeer', 'thresholds': {'high': 30.0, 'low': 10.0, 'change_percent': 15.0}},
-        'MOG': {'name': 'Mog Coin', 'thresholds': {'high': 0.000005, 'low': 0.000001, 'change_percent': 25.0}},
-        'MASK': {'name': 'Mask Network', 'thresholds': {'high': 5.0, 'low': 2.0, 'change_percent': 15.0}},
-        'MINA': {'name': 'Mina', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
-        'BAT': {'name': 'Basic Attention Token', 'thresholds': {'high': 0.5, 'low': 0.15, 'change_percent': 15.0}},
-        'ENJ': {'name': 'Enjin Coin', 'thresholds': {'high': 0.5, 'low': 0.15, 'change_percent': 15.0}},
-        'COTI': {'name': 'COTI', 'thresholds': {'high': 0.3, 'low': 0.05, 'change_percent': 20.0}},
-        'BAND': {'name': 'Band Protocol', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 15.0}},
-        'UMA': {'name': 'UMA', 'thresholds': {'high': 5.0, 'low': 1.5, 'change_percent': 15.0}},
-        'BICO': {'name': 'Biconomy', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 20.0}},
-        'KEEP': {'name': 'Keep Network', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'POWR': {'name': 'Powerledger', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'AUDIO': {'name': 'Audius', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'RLC': {'name': 'iExec RLC', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 15.0}},
-        'SAGA': {'name': 'Saga', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
-        'CTSI': {'name': 'Cartesi', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'SCRT': {'name': 'Secret', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 15.0}},
-        'TNSR': {'name': 'Tensor', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
-        'C98': {'name': 'Coin98', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'OGN': {'name': 'Origin Protocol', 'thresholds': {'high': 0.3, 'low': 0.05, 'change_percent': 20.0}},
-        'RAD': {'name': 'Radworks', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
-        'NYM': {'name': 'NYM', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
-        'ARPA': {'name': 'ARPA', 'thresholds': {'high': 0.2, 'low': 0.03, 'change_percent': 20.0}},
-        'ALCX': {'name': 'Alchemix', 'thresholds': {'high': 50.0, 'low': 15.0, 'change_percent': 15.0}},
-        'ATLAS': {'name': 'Star Atlas', 'thresholds': {'high': 0.01, 'low': 0.003, 'change_percent': 25.0}},
-        'POLIS': {'name': 'Star Atlas DAO', 'thresholds': {'high': 1.0, 'low': 0.2, 'change_percent': 20.0}},
-        'PERP': {'name': 'Perpetual Protocol', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
-        'STEP': {'name': 'Step Finance', 'thresholds': {'high': 0.1, 'low': 0.02, 'change_percent': 25.0}},
-        'RBN': {'name': 'Robonomics.network', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
-        'KP3R': {'name': 'Keep3rV1', 'thresholds': {'high': 100.0, 'low': 30.0, 'change_percent': 15.0}},
-        'KEY': {'name': 'SelfKey', 'thresholds': {'high': 0.02, 'low': 0.005, 'change_percent': 25.0}},
-        'KILT': {'name': 'KILT Protocol', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
-        'TEER': {'name': 'Integritee Network', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 25.0}},
-        'CRU': {'name': 'Crust Shadow', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
-        'ZEUS': {'name': 'Zeus Network', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 25.0}},
-        'MC': {'name': 'Merit Circle', 'thresholds': {'high': 1.0, 'low': 0.2, 'change_percent': 20.0}}
-    }
-    
-    # Configuration - use environment variables for production
-    config = {
-        'news_api_key': os.getenv('NEWS_API_KEY', 'cc793418193f491d9184ad7b00785f37'),
-        'slack': {
-            'enabled': True,
-            'webhook_url': os.getenv('SLACK_WEBHOOK_URL', 'YOUR_SLACK_WEBHOOK_URL')
-        },
-        'email': {
-            'enabled': True,
-            'smtp_server': 'smtp.gmail.com',
-            'smtp_port': 587,
-            'from_email': os.getenv('EMAIL_FROM', 'robin.langeard@gmail.com'),
-            'to_email': os.getenv('EMAIL_TO', 'robin.langeard@gmail.com'),
-            'password': os.getenv('EMAIL_PASSWORD', 'YOUR_GMAIL_APP_PASSWORD')
-        },
-        'stocks': default_stocks,
-        'crypto': default_crypto
-    }
-    
-    monitor = FinanceMonitor(config)
-    
-    # Check if we're running as a one-time task or continuous service
-    run_mode = os.getenv('RUN_MODE', 'continuous')
-    
-    if run_mode == 'continuous':
-        # Intelligent scheduling based on market hours
-        def smart_schedule():
-            paris_now = datetime.now(pytz.timezone('Europe/Paris'))
-            is_market_open = monitor.is_euronext_open()
-            
-            if is_market_open:
-                # During market hours: monitor every 20 minutes (stocks + crypto)
-                schedule.every(20).minutes.do(monitor.monitor_assets)
-                logger.info("📊 Market hours: Monitoring every 20 minutes (stocks + crypto)")
-            else:
-                # After hours: monitor every 60 minutes (crypto only, save resources)
-                schedule.every(60).minutes.do(monitor.monitor_assets)
-                logger.info("🌙 After hours: Monitoring every 60 minutes (crypto focus)")
-        
-        # Initial smart scheduling
-        smart_schedule()
-        
-        # Re-evaluate schedule every 4 hours to adapt to market open/close
-        schedule.every(4).hours.do(smart_schedule)
-        
-        logger.info("🚀 Enhanced Financial Monitor Bot started in CONTINUOUS mode with SMART SCHEDULING")
-        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks via Yahoo Finance + {len(config['crypto'])} cryptocurrencies via CoinGecko")
-        logger.info("💱 All prices converted to EUR for consistency")
-        logger.info("📱 Slack alerts for urgent notifications")
-        logger.info("📧 Daily email reports around 10:00 and 18:00 Paris time")
-        logger.info(f"🏢 Stocks: {len(default_stocks)} French companies")
-        logger.info(f"🪙 Crypto: {len(default_crypto)} cryptocurrencies")
-        logger.info("⚡ CoinGecko API optimized with bulk fetching and caching")
-        logger.info("🧠 Smart scheduling: 20min (market hours) / 60min (after hours)")
-        
-        # Test email configuration on first startup
-        logger.info("🧪 Testing email configuration...")
-        if monitor.test_email_configuration():
-            logger.info("✅ Email test successful - you should receive a test email shortly")
-        else:
-            logger.warning("❌ Email test failed - check your Gmail App Password configuration")
-        
-        # Display current year's holidays for transparency
-        current_year = datetime.now().year
-        holidays = monitor.get_euronext_holidays(current_year)
-        logger.info(f"📅 {current_year} Euronext Paris Market Holidays:")
-        for holiday in holidays:
-            holiday_names = {
-                (1, 1): "New Year's Day",
-                (5, 1): "Labour Day", 
-                (5, 8): "Victory in Europe Day",
-                (7, 14): "Bastille Day",
-                (8, 15): "Assumption of Mary",
-                (11, 1): "All Saints' Day",
-                (11, 11): "Armistice Day",
-                (12, 25): "Christmas Day",
-                (12, 26): "Boxing Day"
-            }
-            
-            # Check if it's an Easter-related holiday
-            easter = monitor.calculate_easter_date(current_year)
-            if holiday == easter - timedelta(days=2):
-                name = "Good Friday"
-            elif holiday == easter + timedelta(days=1):
-                name = "Easter Monday"
-            elif holiday == easter + timedelta(days=39):
-                name = "Ascension Day"
-            elif holiday == easter + timedelta(days=50):
-                name = "Whit Monday"
-            else:
-                name = holiday_names.get((holiday.month, holiday.day), "Unknown Holiday")
-            
-            logger.info(f"   🗓️ {holiday.strftime('%B %d, %Y')} - {name}")
-        
-        # Run once immediately
-        monitor.monitor_assets()
-        
-        # Keep running with smart scheduling
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
-            
-    else:
-        # Single execution mode (for limited platforms like PythonAnywhere)
-        paris_now = datetime.now(pytz.timezone('Europe/Paris'))
-        
-        logger.info(f"🤖 Enhanced Daily Financial Monitor Execution (Single Run Mode)")
-        logger.info(f"⏰ Running at {paris_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-        logger.info(f"📊 Portfolio: {len(config['stocks'])} stocks + {len(config['crypto'])} cryptocurrencies")
-        
-        # Always run monitoring (which will check if daily reports are needed)
-        monitor.monitor_assets()
-        
-        logger.info("✅ Single execution completed")
-
-if __name__ == "__main__":
-    main()
+        return content_html, plain_text
