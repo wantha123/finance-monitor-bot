@@ -1221,4 +1221,122 @@ def main():
         'CRO': {'name': 'Cronos', 'thresholds': {'high': 0.2, 'low': 0.05, 'change_percent': 15.0}},
         'MNT': {'name': 'Mantle', 'thresholds': {'high': 1.5, 'low': 0.5, 'change_percent': 15.0}},
         'RENDER': {'name': 'Render', 'thresholds': {'high': 10.0, 'low': 3.0, 'change_percent': 15.0}},
-        'FET': {'name': 'Artificial Superintelligence Alliance', 'thresholds': {'high': 2.0, 'low': 0.5
+        'FET': {'name': 'Artificial Superintelligence Alliance', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
+        'ARB': {'name': 'Arbitrum', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
+        'FIL': {'name': 'Filecoin', 'thresholds': {'high': 10.0, 'low': 3.0, 'change_percent': 15.0}},
+        'ALGO': {'name': 'Algorand', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
+        'MKR': {'name': 'Sky', 'thresholds': {'high': 2000.0, 'low': 800.0, 'change_percent': 12.0}},
+        'GRT': {'name': 'The Graph', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 15.0}},
+        'ENS': {'name': 'Ethereum Name Service', 'thresholds': {'high': 50.0, 'low': 15.0, 'change_percent': 15.0}},
+        'GALA': {'name': 'Gala', 'thresholds': {'high': 0.1, 'low': 0.02, 'change_percent': 20.0}},
+        'FLOW': {'name': 'Flow', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
+        'MANA': {'name': 'Decentraland', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 15.0}},
+        'STRK': {'name': 'Starknet', 'thresholds': {'high': 3.0, 'low': 1.0, 'change_percent': 15.0}},
+        'EIGEN': {'name': 'EigenLayer', 'thresholds': {'high': 10.0, 'low': 2.0, 'change_percent': 15.0}},
+        'EGLD': {'name': 'MultiversX', 'thresholds': {'high': 50.0, 'low': 20.0, 'change_percent': 12.0}},
+        'MOVE': {'name': 'Movement', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
+        'LPT': {'name': 'Livepeer', 'thresholds': {'high': 30.0, 'low': 10.0, 'change_percent': 15.0}},
+        'MOG': {'name': 'Mog Coin', 'thresholds': {'high': 0.000005, 'low': 0.000001, 'change_percent': 25.0}},
+        'MASK': {'name': 'Mask Network', 'thresholds': {'high': 5.0, 'low': 2.0, 'change_percent': 15.0}},
+        'MINA': {'name': 'Mina', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
+        'BAT': {'name': 'Basic Attention Token', 'thresholds': {'high': 0.5, 'low': 0.15, 'change_percent': 15.0}},
+        'ENJ': {'name': 'Enjin Coin', 'thresholds': {'high': 0.5, 'low': 0.15, 'change_percent': 15.0}},
+        'COTI': {'name': 'COTI', 'thresholds': {'high': 0.3, 'low': 0.05, 'change_percent': 20.0}},
+        'BAND': {'name': 'Band Protocol', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 15.0}},
+        'UMA': {'name': 'UMA', 'thresholds': {'high': 5.0, 'low': 1.5, 'change_percent': 15.0}},
+        'BICO': {'name': 'Biconomy', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 20.0}},
+        'KEEP': {'name': 'Keep Network', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'POWR': {'name': 'Powerledger', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'AUDIO': {'name': 'Audius', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'RLC': {'name': 'iExec RLC', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 15.0}},
+        'SAGA': {'name': 'Saga', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
+        'CTSI': {'name': 'Cartesi', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'SCRT': {'name': 'Secret', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 15.0}},
+        'TNSR': {'name': 'Tensor', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
+        'C98': {'name': 'Coin98', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'OGN': {'name': 'Origin Protocol', 'thresholds': {'high': 0.3, 'low': 0.05, 'change_percent': 20.0}},
+        'RAD': {'name': 'Radworks', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
+        'NYM': {'name': 'NYM', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 20.0}},
+        'ARPA': {'name': 'ARPA', 'thresholds': {'high': 0.2, 'low': 0.03, 'change_percent': 20.0}},
+        'ALCX': {'name': 'Alchemix', 'thresholds': {'high': 50.0, 'low': 15.0, 'change_percent': 15.0}},
+        'ATLAS': {'name': 'Star Atlas', 'thresholds': {'high': 0.01, 'low': 0.003, 'change_percent': 25.0}},
+        'POLIS': {'name': 'Star Atlas DAO', 'thresholds': {'high': 1.0, 'low': 0.2, 'change_percent': 20.0}},
+        'PERP': {'name': 'Perpetual Protocol', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 15.0}},
+        'STEP': {'name': 'Step Finance', 'thresholds': {'high': 0.1, 'low': 0.02, 'change_percent': 25.0}},
+        'RBN': {'name': 'Robonomics.network', 'thresholds': {'high': 5.0, 'low': 1.0, 'change_percent': 20.0}},
+        'KP3R': {'name': 'Keep3rV1', 'thresholds': {'high': 100.0, 'low': 30.0, 'change_percent': 15.0}},
+        'KEY': {'name': 'SelfKey', 'thresholds': {'high': 0.02, 'low': 0.005, 'change_percent': 25.0}},
+        'KILT': {'name': 'KILT Protocol', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
+        'TEER': {'name': 'Integritee Network', 'thresholds': {'high': 0.5, 'low': 0.1, 'change_percent': 25.0}},
+        'CRU': {'name': 'Crust Shadow', 'thresholds': {'high': 2.0, 'low': 0.5, 'change_percent': 20.0}},
+        'ZEUS': {'name': 'Zeus Network', 'thresholds': {'high': 1.0, 'low': 0.3, 'change_percent': 25.0}},
+        'MC': {'name': 'Merit Circle', 'thresholds': {'high': 1.0, 'low': 0.2, 'change_percent': 20.0}}
+    }
+    
+    # Configuration - use environment variables for production
+    config = {
+        'news_api_key': os.getenv('NEWS_API_KEY', 'cc793418193f491d9184ad7b00785f37'),
+        'slack': {
+            'enabled': True,
+            'webhook_url': os.getenv('SLACK_WEBHOOK_URL', 'YOUR_SLACK_WEBHOOK_URL')
+        },
+        'email': {
+            'enabled': True,
+            'smtp_server': 'smtp.gmail.com',
+            'smtp_port': 587,
+            'from_email': os.getenv('EMAIL_FROM', 'robin.langeard@gmail.com'),
+            'to_email': os.getenv('EMAIL_TO', 'robin.langeard@gmail.com'),
+            'password': os.getenv('EMAIL_PASSWORD', 'YOUR_GMAIL_APP_PASSWORD')
+        },
+        'stocks': default_stocks,
+        'crypto': default_crypto
+    }
+    
+    monitor = FinanceMonitor(config)
+    
+    # Check if we're running as a one-time task or continuous service
+    run_mode = os.getenv('RUN_MODE', 'continuous')
+    
+    if run_mode == 'continuous':
+        # Schedule monitoring every 20 minutes (optimized for large portfolio)
+        schedule.every(20).minutes.do(monitor.monitor_assets)
+        
+        logger.info("🚀 Enhanced Financial Monitor Bot started in CONTINUOUS mode")
+        logger.info(f"📊 Monitoring {len(config['stocks'])} French stocks via Yahoo Finance + {len(config['crypto'])} cryptocurrencies via CoinGecko")
+        logger.info("💱 All prices converted to EUR for consistency")
+        logger.info("📱 Slack alerts for urgent notifications")
+        logger.info("📧 Daily email reports around 10:00 and 18:00 Paris time")
+        logger.info(f"🏢 Stocks: {len(default_stocks)} French companies")
+        logger.info(f"🪙 Crypto: {len(default_crypto)} cryptocurrencies")
+        logger.info("⚡ CoinGecko API optimized with bulk fetching and caching")
+        
+        # Test email configuration on first startup
+        logger.info("🧪 Testing email configuration...")
+        if monitor.test_email_configuration():
+            logger.info("✅ Email test successful - you should receive a test email shortly")
+        else:
+            logger.warning("❌ Email test failed - check your Gmail App Password configuration")
+        
+        # Run once immediately
+        monitor.monitor_assets()
+        
+        # Keep running
+        while True:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+            
+    else:
+        # Single execution mode (for limited platforms like PythonAnywhere)
+        paris_now = datetime.now(pytz.timezone('Europe/Paris'))
+        
+        logger.info(f"🤖 Enhanced Daily Financial Monitor Execution (Single Run Mode)")
+        logger.info(f"⏰ Running at {paris_now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        logger.info(f"📊 Portfolio: {len(config['stocks'])} stocks + {len(config['crypto'])} cryptocurrencies")
+        
+        # Always run monitoring (which will check if daily reports are needed)
+        monitor.monitor_assets()
+        
+        logger.info("✅ Single execution completed")
+
+if __name__ == "__main__":
+    main()
