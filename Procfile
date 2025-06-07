@@ -1,1 +1,1 @@
-worker: python financial_monitor_MAIN.py
+worker: python main.py
