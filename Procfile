@@ -1,1 +1,1 @@
-worker: python3 -m finance_monitor
+worker: python3 mai.py
