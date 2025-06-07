@@ -1,98 +1,4 @@
-def monitor_assets(self):
-        """Main monitoring function for multiple assets with enhanced notifications"""
-        logger.info("Starting comprehensive asset monitoring cycle...")
-        
-        # Check if we should send a daily report during this monitoring cycle
-        report_type = self.should_send_daily_report()
-        if report_type:
-            logger.info(f"📧 Time for {report_type} daily report!")
-            self.send_daily_report(report_type)
-        
-        alerts = []
-        market_status = []
-        stock_data = {}
-        crypto_data = {}
-        
-        # Check market status
-        if self.is_euronext_open():
-            market_status.append("🟢 Euronext Paris: OPEN")
-        else:
-            next_open = self.get_next_market_open()
-            market_status.append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
-        
-        market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
-        
-        # Monitor all stocks from configuration
-        stock_symbols = self.config.get('stocks', {})
-        logger.info(f"Monitoring {len(stock_symbols)} stocks via Yahoo Finance...")
-        
-        for symbol, stock_config in stock_symbols.items():
-            try:
-                data = self.get_stock_price(symbol)
-                if data:
-                    # Store price data
-                    self.store_price_data(symbol, data['current_price'], 'stock')
-                    
-                    # Check alerts with enhanced formatting
-                    thresholds = stock_config.get('thresholds', {})
-                    stock_alerts = self.check_price_alerts(symbol, data['current_price'], thresholds)
-                    alerts.extend(stock_alerts)
-                    
-                    # Store for reporting
-                    stock_data[symbol] = data
-                    
-                    logger.info(f"{stock_config['name']} ({symbol}): €{data['current_price']:.2f} ({data['change_percent']:+.2f}%)")
-                elif symbol.endswith('.PA') and not self.is_euronext_open():
-                    logger.info(f"{stock_config['name']} ({symbol}): Market closed")
-                else:
-                    logger.warning(f"Failed to get data for {symbol}")
-                    
-            except Exception as e:
-                logger.error(f"Error monitoring {symbol}: {e}")
-                continue
-        
-        # Monitor all cryptocurrencies (efficient bulk fetch)
-        crypto_symbols = self.config.get('crypto', {})
-        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies via CoinGecko...")
-        
-        try:
-            all_crypto_data = self.get_all_crypto_prices()
-            
-            for symbol, crypto_config in crypto_symbols.items():
-                if symbol in all_crypto_data:
-                    data = all_crypto_data[symbol]
-                    
-                    # Store EUR price in database
-                    if data['current_price_eur']:
-                        self.store_price_data(symbol, data['current_price_eur'], 'crypto')
-                        
-                        thresholds = crypto_config.get('thresholds', {})
-                        crypto_alerts = self.check_price_alerts(symbol, data['current_price_eur'], thresholds)
-                        alerts.extend(crypto_alerts)
-                        
-                        # Store for reporting
-                        crypto_data[symbol] = data
-                        
-                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.4f} ({data['change_percent_24h']:+.2f}%)")
-                    else:
-                        logger.warning(f"No EUR price available for {symbol}")
-                else:
-                    logger.warning(f"No data returned for {symbol}")
-                    
-        except Exception as e:
-            logger.error(f"Error monitoring cryptocurrencies: {e}")
-        
-        # Get news - highly optimized for large portfolio
-        current_minute = datetime.now().minute
-        should_check_news = (
-            self.is_euronext_open() and current_minute == 0  # Only once per hour during market hours
-        )
-        
-        news_items = []
-        if should_check_news:
-            logger.info("Checking news for priority assets (API optimized)...")
-            # Only check news for top assets to save API calls
-            priority_stocks = ['OVH.PA', 'STMPA.PA', 'STLAP.PA', 'MT.PA', 'ENGI.PA']
+priority_stocks = ['OVH.PA', 'STMPA.PA', 'STLAP.PA', 'MT.PA', 'ENGI.PA']
             priority_crypto = ['ETH', 'SOL', 'DOGE']
             
             # Stock news
@@ -149,7 +55,7 @@ def monitor_assets(self):
         logger.info("=" * 60)
     
     def create_enhanced_alert_message(self, alerts: List[str], market_status: List[str], 
-                                    stock_data: Dict, crypto_data: Dict, news_items: List) -> str:
+                                      stock_data: Dict, crypto_data: Dict, news_items: List) -> str:
         """Create visually enhanced alert message for notifications"""
         
         # Header with clear visual hierarchy
@@ -457,7 +363,101 @@ def main():
         logger.info("✅ Single execution completed")
 
 if __name__ == "__main__":
-    main()#!/usr/bin/env python3
+    main()    def monitor_assets(self):
+        """Main monitoring function for multiple assets with enhanced notifications"""
+        logger.info("Starting comprehensive asset monitoring cycle...")
+        
+        # Check if we should send a daily report during this monitoring cycle
+        report_type = self.should_send_daily_report()
+        if report_type:
+            logger.info(f"📧 Time for {report_type} daily report!")
+            self.send_daily_report(report_type)
+        
+        alerts = []
+        market_status = []
+        stock_data = {}
+        crypto_data = {}
+        
+        # Check market status
+        if self.is_euronext_open():
+            market_status.append("🟢 Euronext Paris: OPEN")
+        else:
+            next_open = self.get_next_market_open()
+            market_status.append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
+        
+        market_status.append("🟢 Crypto Markets: ALWAYS OPEN")
+        
+        # Monitor all stocks from configuration
+        stock_symbols = self.config.get('stocks', {})
+        logger.info(f"Monitoring {len(stock_symbols)} stocks via Yahoo Finance...")
+        
+        for symbol, stock_config in stock_symbols.items():
+            try:
+                data = self.get_stock_price(symbol)
+                if data:
+                    # Store price data
+                    self.store_price_data(symbol, data['current_price'], 'stock')
+                    
+                    # Check alerts with enhanced formatting
+                    thresholds = stock_config.get('thresholds', {})
+                    stock_alerts = self.check_price_alerts(symbol, data['current_price'], thresholds)
+                    alerts.extend(stock_alerts)
+                    
+                    # Store for reporting
+                    stock_data[symbol] = data
+                    
+                    logger.info(f"{stock_config['name']} ({symbol}): €{data['current_price']:.2f} ({data['change_percent']:+.2f}%)")
+                elif symbol.endswith('.PA') and not self.is_euronext_open():
+                    logger.info(f"{stock_config['name']} ({symbol}): Market closed")
+                else:
+                    logger.warning(f"Failed to get data for {symbol}")
+                    
+            except Exception as e:
+                logger.error(f"Error monitoring {symbol}: {e}")
+                continue
+        
+        # Monitor all cryptocurrencies (efficient bulk fetch)
+        crypto_symbols = self.config.get('crypto', {})
+        logger.info(f"Monitoring {len(crypto_symbols)} cryptocurrencies via CoinGecko...")
+        
+        try:
+            all_crypto_data = self.get_all_crypto_prices()
+            
+            for symbol, crypto_config in crypto_symbols.items():
+                if symbol in all_crypto_data:
+                    data = all_crypto_data[symbol]
+                    
+                    # Store EUR price in database
+                    if data['current_price_eur']:
+                        self.store_price_data(symbol, data['current_price_eur'], 'crypto')
+                        
+                        thresholds = crypto_config.get('thresholds', {})
+                        crypto_alerts = self.check_price_alerts(symbol, data['current_price_eur'], thresholds)
+                        alerts.extend(crypto_alerts)
+                        
+                        # Store for reporting
+                        crypto_data[symbol] = data
+                        
+                        logger.info(f"{crypto_config['name']} ({symbol}): €{data['current_price_eur']:.4f} ({data['change_percent_24h']:+.2f}%)")
+                    else:
+                        logger.warning(f"No EUR price available for {symbol}")
+                else:
+                    logger.warning(f"No data returned for {symbol}")
+                    
+        except Exception as e:
+            logger.error(f"Error monitoring cryptocurrencies: {e}")
+        
+        # Get news - highly optimized for large portfolio
+        current_minute = datetime.now().minute
+        should_check_news = (
+            self.is_euronext_open() and current_minute == 0  # Only once per hour during market hours
+        )
+        
+        news_items = []
+        if should_check_news:
+            logger.info("Checking news for priority assets (API optimized)...")
+            # Only check news for top assets to save API calls
+            priority_stocks = ['OV#!/usr/bin/env python3
 """
 Financial & Crypto Monitoring Bot
 Monitors 37 French stocks and 60+ cryptocurrencies with news alerts
@@ -465,7 +465,7 @@ Uses Yahoo Finance with automatic EUR conversion
 Enhanced with professional UI/UX design and visual clarity
 """
 
-import requests
+import re  # Add this to imports at the top
 import json
 import time
 import smtplib
@@ -878,652 +878,7 @@ class FinanceMonitor:
             }
             
         except Exception as e:
-            logger.error(f"Error recording report: {e}")
-    
-    def test_email_configuration(self):
-        """Test email configuration by sending a test message"""
-        try:
-            subject = "🧪 Enhanced Financial Monitor - Email Test"
-            message = """This is a test email from your Enhanced Financial Monitor Bot.
-
-If you receive this message, your email configuration is working correctly!
-
-✅ SMTP Server: Connected
-✅ Authentication: Successful  
-✅ Email Delivery: Working
-
-Your monitoring covers:
-📊 37 French stocks via Yahoo Finance
-🪙 60+ cryptocurrencies via CoinGecko
-
-Your morning reports will be sent around 10:00 AM Paris time.
-Your evening reports will be sent around 6:00 PM Paris time.
-
----
-Enhanced Financial Monitor Bot v2.0
-"""
-            
-            self.send_email_notification(subject, message)
-            logger.info("📧 Test email sent successfully!")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Email test failed: {e}")
-            return False
-    
-    def create_html_email(self, subject: str, content: str, report_type: str = None) -> str:
-        """Create professional HTML email with enhanced formatting"""
-        paris_time = datetime.now(self.paris_tz)
-        
-        # Parse content to create structured HTML
-        html_content = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <style>
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #f5f5f5;
-            margin: 0;
-            padding: 20px;
-        }}
-        .container {{
-            max-width: 800px;
-            margin: 0 auto;
-            background-color: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }}
-        .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }}
-        .header h1 {{
-            margin: 0;
-            font-size: 28px;
-            font-weight: 600;
-        }}
-        .header p {{
-            margin: 10px 0 0 0;
-            opacity: 0.9;
-        }}
-        .content {{
-            padding: 30px;
-        }}
-        .section {{
-            margin: 25px 0;
-            padding: 20px;
-            border-left: 4px solid #667eea;
-            background: #f8f9fa;
-            border-radius: 5px;
-        }}
-        .section h2 {{
-            margin-top: 0;
-            color: #333;
-            font-size: 20px;
-        }}
-        .asset-grid {{
-            display: grid;
-            gap: 10px;
-            margin: 15px 0;
-        }}
-        .asset-row {{
-            padding: 12px;
-            background: white;
-            border-radius: 5px;
-            border-left: 3px solid #dee2e6;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: all 0.2s ease;
-        }}
-        .asset-row:hover {{
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }}
-        .asset-row.gain {{
-            border-left-color: #28a745;
-            background: #f0fff4;
-        }}
-        .asset-row.loss {{
-            border-left-color: #dc3545;
-            background: #fff5f5;
-        }}
-        .asset-info {{
-            flex: 1;
-        }}
-        .asset-name {{
-            font-weight: 600;
-            color: #333;
-        }}
-        .asset-symbol {{
-            color: #6c757d;
-            font-size: 14px;
-        }}
-        .asset-price {{
-            text-align: right;
-        }}
-        .price-value {{
-            font-family: 'Courier New', monospace;
-            font-size: 18px;
-            font-weight: 600;
-            color: #333;
-        }}
-        .price-change {{
-            font-size: 14px;
-            font-weight: 600;
-            margin-top: 4px;
-        }}
-        .gain .price-change {{
-            color: #28a745;
-        }}
-        .loss .price-change {{
-            color: #dc3545;
-        }}
-        .neutral .price-change {{
-            color: #6c757d;
-        }}
-        .stats-box {{
-            background: #e7f3ff;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-            text-align: center;
-        }}
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
-            margin-top: 15px;
-        }}
-        .stat-item {{
-            text-align: center;
-        }}
-        .stat-value {{
-            font-size: 24px;
-            font-weight: 600;
-            color: #667eea;
-        }}
-        .stat-label {{
-            font-size: 14px;
-            color: #6c757d;
-            margin-top: 5px;
-        }}
-        .alert-box {{
-            background: #fff3cd;
-            border-left: 4px solid #ffc107;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 5px;
-        }}
-        .alert-box.high {{
-            background: #f8d7da;
-            border-left-color: #dc3545;
-        }}
-        .alert-box.low {{
-            background: #d1ecf1;
-            border-left-color: #17a2b8;
-        }}
-        .news-item {{
-            padding: 15px;
-            border-bottom: 1px solid #dee2e6;
-        }}
-        .news-item:last-child {{
-            border-bottom: none;
-        }}
-        .news-title {{
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 5px;
-        }}
-        .news-meta {{
-            font-size: 14px;
-            color: #6c757d;
-        }}
-        .footer {{
-            background: #343a40;
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }}
-        .footer p {{
-            margin: 5px 0;
-            opacity: 0.9;
-        }}
-        .emoji {{
-            font-size: 1.2em;
-            margin-right: 5px;
-        }}
-        @media (max-width: 600px) {{
-            .stats-grid {{
-                grid-template-columns: 1fr;
-            }}
-            .asset-row {{
-                flex-direction: column;
-                text-align: center;
-            }}
-            .asset-price {{
-                margin-top: 10px;
-            }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>{subject}</h1>
-            <p>📅 {paris_time.strftime('%A, %B %d, %Y')} | 🕐 {paris_time.strftime('%H:%M %Z')}</p>
-        </div>
-        <div class="content">
-            {content}
-        </div>
-        <div class="footer">
-            <p><strong>🤖 Enhanced Financial Monitor v2.0</strong></p>
-            <p>📊 Monitoring {len(self.config.get('stocks', {}))} French Stocks + {len(self.config.get('crypto', {}))} Cryptocurrencies</p>
-            <p>💱 All prices in EUR | 📈 Real-time data from Yahoo Finance & CoinGecko</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
-        return html_content
-    
-    def send_email_notification(self, subject: str, message: str, use_html: bool = True):
-        """Send enhanced email notification with HTML formatting"""
-        try:
-            email_config = self.config.get('email', {})
-            if not email_config.get('enabled', False):
-                logger.info(f"Email disabled. Would send: {subject}")
-                return
-            
-            msg = MIMEMultipart('alternative')
-            msg['From'] = email_config['from_email']
-            msg['To'] = email_config['to_email']
-            msg['Subject'] = subject
-            
-            # Always attach plain text version
-            text_part = MIMEText(message, 'plain', 'utf-8')
-            msg.attach(text_part)
-            
-            # Add HTML version if enabled
-            if use_html:
-                html_content = self.create_html_email(subject, message)
-                html_part = MIMEText(html_content, 'html', 'utf-8')
-                msg.attach(html_part)
-            
-            server = smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port'])
-            server.starttls()
-            server.login(email_config['from_email'], email_config['password'])
-            text = msg.as_string()
-            server.sendmail(email_config['from_email'], email_config['to_email'], text)
-            server.quit()
-            
-            logger.info(f"Enhanced email sent: {subject}")
-        except Exception as e:
-            logger.error(f"Error sending email: {e}")
-    
-    def send_slack_notification(self, message: str):
-        """Send notification to Slack with enhanced formatting"""
-        try:
-            slack_config = self.config.get('slack', {})
-            if not slack_config.get('enabled', False):
-                logger.info(f"Slack disabled. Would send: {message[:100]}...")
-                return
-            
-            webhook_url = slack_config.get('webhook_url')
-            if not webhook_url:
-                logger.error("Slack webhook URL not configured")
-                return
-            
-            # Parse message to extract alerts
-            alerts_count = message.count("THRESHOLD REACHED") + message.count("SIGNIFICANT MOVEMENT")
-            
-            # Create enhanced Slack payload
-            payload = {
-                "text": f"🚨 Portfolio Alert - {alerts_count} notifications",
-                "blocks": [
-                    {
-                        "type": "header",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "🚨 Enhanced Portfolio Alert"
-                        }
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} CET | 📊 {len(self.config.get('stocks', {}))} Stocks + {len(self.config.get('crypto', {}))} Crypto"
-                            }
-                        ]
-                    },
-                    {
-                        "type": "divider"
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"```{message}```"
-                        }
-                    },
-                    {
-                        "type": "divider"
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": "🤖 Enhanced Financial Monitor | 🔄 Next check in 20min | 📧 Reports at 10:00 & 18:00 CET"
-                            }
-                        ]
-                    }
-                ]
-            }
-            
-            response = requests.post(webhook_url, json=payload, timeout=10)
-            response.raise_for_status()
-            
-            logger.info("Enhanced Slack notification sent successfully")
-            
-        except Exception as e:
-            logger.error(f"Error sending Slack notification: {e}")
-    
-    def send_notification(self, subject: str, message: str, notification_type: str = "alert"):
-        """Send notification via configured method"""
-        if notification_type == "daily_report":
-            # Daily reports go to email with HTML formatting
-            self.send_email_notification(subject, message, use_html=True)
-        else:
-            # Alerts go to Slack
-            self.send_slack_notification(message)
-    
-    def get_daily_summary(self) -> Dict:
-        """Get daily summary of prices and changes for all assets"""
-        summary = {
-            'stock_data': {},
-            'crypto_data': {},
-            'market_status': [],
-            'daily_changes': {}
-        }
-        
-        # Check market status
-        if self.is_euronext_open():
-            summary['market_status'].append("🟢 Euronext Paris: OPEN")
-        else:
-            next_open = self.get_next_market_open()
-            summary['market_status'].append(f"🔴 Euronext Paris: CLOSED (Next open: {next_open.strftime('%Y-%m-%d %H:%M %Z')})")
-        
-        summary['market_status'].append("🟢 Crypto Markets: ALWAYS OPEN")
-        
-        # Get current prices for all stocks
-        stock_symbols = self.config.get('stocks', {})
-        for symbol, stock_config in stock_symbols.items():
-            data = self.get_stock_price(symbol)
-            if data:
-                summary['stock_data'][symbol] = data
-        
-        # Get current prices for all crypto (in one efficient API call)
-        all_crypto_data = self.get_all_crypto_prices()
-        summary['crypto_data'] = all_crypto_data
-        
-        # Get daily changes from database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Get prices from 24 hours ago
-        yesterday = datetime.now() - timedelta(days=1)
-        
-        # Check all tracked symbols
-        all_symbols = list(stock_symbols.keys()) + list(all_crypto_data.keys())
-        for symbol in all_symbols:
-            cursor.execute('''
-                SELECT price FROM price_history 
-                WHERE symbol = ? AND timestamp >= ? 
-                ORDER BY timestamp ASC LIMIT 1
-            ''', (symbol, yesterday.isoformat()))
-            
-            result = cursor.fetchone()
-            if result:
-                old_price = result[0]
-                current_price = None
-                
-                # Get current price
-                if symbol in summary['stock_data']:
-                    current_price = summary['stock_data'][symbol]['current_price']
-                elif symbol in summary['crypto_data']:
-                    current_price = summary['crypto_data'][symbol]['current_price_eur']
-                
-                if current_price:
-                    change = ((current_price - old_price) / old_price) * 100
-                    asset_name = stock_symbols.get(symbol, {}).get('name', 
-                                  self.config.get('crypto', {}).get(symbol, {}).get('name', symbol))
-                    summary['daily_changes'][symbol] = {
-                        'name': asset_name,
-                        'old_price': old_price,
-                        'current_price': current_price,
-                        'change_percent': change
-                    }
-        
-        conn.close()
-        return summary
-    
-    def create_enhanced_daily_report(self, summary: Dict, report_type: str = "morning") -> tuple:
-        """Create enhanced daily report with professional formatting"""
-        paris_time = datetime.now(self.paris_tz)
-        
-        # Header
-        if report_type == "morning":
-            header_emoji = "🌅"
-            greeting = "Good morning! Here's your enhanced financial market update:"
-        else:
-            header_emoji = "🌆"
-            greeting = "Good evening! Here's your enhanced end-of-day financial summary:"
-        
-        # Start building HTML content
-        html_sections = []
-        
-        # Market Status Section
-        market_status_html = '<div class="section"><h2>📊 Market Status</h2>'
-        for status in summary['market_status']:
-            if "OPEN" in status:
-                market_status_html += f'<p style="color: #28a745; font-weight: bold;">✅ {status}</p>'
-            else:
-                market_status_html += f'<p style="color: #dc3545; font-weight: bold;">❌ {status}</p>'
-        market_status_html += '</div>'
-        html_sections.append(market_status_html)
-        
-        # Portfolio Performance Section
-        all_assets = []
-        
-        # Add stocks
-        for symbol, data in summary['stock_data'].items():
-            stock_config = self.config['stocks'][symbol]
-            all_assets.append({
-                'name': stock_config['name'],
-                'symbol': symbol,
-                'price': data['current_price'],
-                'change': data['change_percent'],
-                'type': '🏢',
-                'category': 'stock'
-            })
-        
-        # Add crypto
-        for symbol, data in summary['crypto_data'].items():
-            crypto_config = self.config['crypto'][symbol]
-            all_assets.append({
-                'name': crypto_config['name'],
-                'symbol': symbol,
-                'price': data['current_price_eur'],
-                'change': data['change_percent_24h'] or 0,
-                'type': '🪙',
-                'category': 'crypto'
-            })
-        
-        # Sort by change percentage
-        all_assets.sort(key=lambda x: x['change'], reverse=True)
-        
-        # Top Performers Section
-        top_performers_html = '<div class="section"><h2>📈 Top Performers</h2><div class="asset-grid">'
-        for asset in all_assets[:5]:
-            change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
-            top_performers_html += f'''
-                <div class="asset-row {change_class}">
-                    <div class="asset-info">
-                        <div class="asset-name">{asset['type']} {asset['name']}</div>
-                        <div class="asset-symbol">{asset['symbol']}</div>
-                    </div>
-                    <div class="asset-price">
-                        <div class="price-value">€{asset['price']:.4f}</div>
-                        <div class="price-change">{asset['change']:+.2f}%</div>
-                    </div>
-                </div>
-            '''
-        top_performers_html += '</div></div>'
-        html_sections.append(top_performers_html)
-        
-        # Worst Performers Section
-        worst_performers_html = '<div class="section"><h2>📉 Worst Performers</h2><div class="asset-grid">'
-        for asset in all_assets[-5:]:
-            change_class = "gain" if asset['change'] > 0 else "loss" if asset['change'] < 0 else "neutral"
-            worst_performers_html += f'''
-                <div class="asset-row {change_class}">
-                    <div class="asset-info">
-                        <div class="asset-name">{asset['type']} {asset['name']}</div>
-                        <div class="asset-symbol">{asset['symbol']}</div>
-                    </div>
-                    <div class="asset-price">
-                        <div class="price-value">€{asset['price']:.4f}</div>
-                        <div class="price-change">{asset['change']:+.2f}%</div>
-                    </div>
-                </div>
-            '''
-        worst_performers_html += '</div></div>'
-        html_sections.append(worst_performers_html)
-        
-        # Portfolio Statistics
-        if all_assets:
-            total_assets = len(all_assets)
-            gainers = len([a for a in all_assets if a['change'] > 0])
-            losers = len([a for a in all_assets if a['change'] < 0])
-            unchanged = total_assets - gainers - losers
-            
-            stats_html = f'''
-                <div class="stats-box">
-                    <h2>📊 Portfolio Statistics</h2>
-                    <div class="stats-grid">
-                        <div class="stat-item">
-                            <div class="stat-value">{gainers}</div>
-                            <div class="stat-label">📈 Gainers ({gainers/total_assets*100:.1f}%)</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value">{losers}</div>
-                            <div class="stat-label">📉 Losers ({losers/total_assets*100:.1f}%)</div>
-                        </div>
-                        <div class="stat-item">
-                            <div class="stat-value">{unchanged}</div>
-                            <div class="stat-label">➡️ Unchanged ({unchanged/total_assets*100:.1f}%)</div>
-                        </div>
-                    </div>
-                </div>
-            '''
-            html_sections.append(stats_html)
-        
-        # Combine all sections
-        content_html = '\n'.join(html_sections)
-        
-        # Also create plain text version
-        plain_text = f"{greeting}\n\n"
-        plain_text += "=" * 60 + "\n"
-        plain_text += f"📅 ENHANCED DAILY FINANCIAL REPORT - {paris_time.strftime('%A, %B %d, %Y')}\n"
-        plain_text += f"🕐 Generated at: {paris_time.strftime('%H:%M %Z')}\n"
-        plain_text += f"📊 Coverage: {len(self.config.get('stocks', {}))} stocks + {len(self.config.get('crypto', {}))} cryptocurrencies\n"
-        plain_text += "=" * 60 + "\n\n"
-        
-        # Add market status
-        plain_text += "📊 MARKET STATUS:\n"
-        for status in summary['market_status']:
-            plain_text += f"  {status}\n"
-        plain_text += "\n"
-        
-        # Add top performers
-        plain_text += "📈 TOP PERFORMERS:\n"
-        for asset in all_assets[:5]:
-            plain_text += f"  {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
-        plain_text += "\n"
-        
-        # Add worst performers
-        plain_text += "📉 WORST PERFORMERS:\n"
-        for asset in all_assets[-5:]:
-            plain_text += f"  {asset['type']} {asset['name']}: €{asset['price']:.4f} ({asset['change']:+.2f}%)\n"
-        plain_text += "\n"
-        
-        # Add statistics
-        if all_assets:
-            plain_text += "📊 PORTFOLIO STATISTICS:\n"
-            plain_text += f"  📈 Gainers: {gainers} ({gainers/total_assets*100:.1f}%)\n"
-            plain_text += f"  📉 Losers: {losers} ({losers/total_assets*100:.1f}%)\n"
-            plain_text += f"  ➡️ Unchanged: {unchanged} ({unchanged/total_assets*100:.1f}%)\n"
-            plain_text += f"  📊 Total Assets: {total_assets}\n\n"
-        
-        # Footer
-        plain_text += "=" * 60 + "\n"
-        plain_text += "🤖 Enhanced Financial Monitor v2.0\n"
-        plain_text += "=" * 60
-        
-        return content_html, plain_text
-    
-    def send_daily_report(self, report_type: str = "morning"):
-        """Send enhanced daily email report"""
-        logger.info(f"Generating enhanced {report_type} daily report...")
-        
-        summary = self.get_daily_summary()
-        paris_time = datetime.now(self.paris_tz)
-        
-        if report_type == "morning":
-            subject = f"🌅 Morning Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-        else:  # evening
-            subject = f"🌆 Evening Financial Report - {paris_time.strftime('%Y-%m-%d')}"
-        
-        # Create enhanced report
-        html_content, plain_text = self.create_enhanced_daily_report(summary, report_type)
-        
-        # For HTML emails, we pass the HTML content which will be properly formatted
-        # The create_html_email method will wrap it in the full HTML template
-        self.send_notification(subject, html_content, notification_type="daily_report")
-        
-        # Record that we sent this report
-        self.record_report_sent(report_type)
-        
-        logger.info(f"Enhanced {report_type} daily report sent")
-    
-    def should_send_daily_report(self) -> Optional[str]:
-        """Check if it's time to send a daily report"""
-        paris_now = datetime.now(self.paris_tz)
-        current_hour = paris_now.hour
-        current_minute = paris_now.minute
-        today = paris_now.date()
-        
-        # Morning report window: 9:30 AM - 10:30 AM
-        if 9 <= current_hour <= 10:
-            if (current_hour == 9 and current_minute >= 30) or (current_hour == 10 and current_minute <= 30):
-                if not self.has_sent_report_today('morning', today):
-                    return 'morning'
-        
-        # Evening report window: 5:30 PM - 6:30 PM
-        if 17 <= current_hour <= 18:
-            if (current_hour == 17 and current_minute >= 30) or (current_hour == 18 and current_minute <= 30):
-                if not self.has_sent_report_today('evening', today):
-                    return 'evening'
-        
-        return None"Error fetching {symbol} price: {e}")
+            logger.error(f"Error fetching {symbol} price: {e}")
             return None
 
     def get_all_crypto_prices(self) -> Dict[str, Dict]:
@@ -1652,20 +1007,17 @@ Enhanced Financial Monitor Bot v2.0
     
     def format_price_change_display(self, asset_name: str, symbol: str, current_price: float, 
                                    previous_price: float, change_percent: float, asset_type: str = "stock") -> str:
-        """Format price change with clear before/after display and visual indicators"""
+        """Format price change with concise display and visual indicators"""
         
         # Determine direction and color indicators
         if change_percent > 0:
             direction_emoji = "📈"
-            change_indicator = "GAIN"
             trend_symbol = "▲"
         elif change_percent < 0:
             direction_emoji = "📉"
-            change_indicator = "LOSS" 
             trend_symbol = "▼"
         else:
             direction_emoji = "➡️"
-            change_indicator = "FLAT"
             trend_symbol = "━"
         
         # Asset type emoji
@@ -1679,11 +1031,11 @@ Enhanced Financial Monitor Bot v2.0
         else:
             price_format = ".6f"
         
-        # Create clear before/after display
+        # Create concise display (removed verbose BEFORE/AFTER)
         formatted_display = (
             f"{direction_emoji} {type_emoji} {asset_name} ({symbol})\n"
-            f"   💰 BEFORE: €{previous_price:{price_format}} → AFTER: €{current_price:{price_format}}\n"
-            f"   {trend_symbol} {change_indicator}: {change_percent:+.2f}%"
+            f"   💰 €{previous_price:{price_format}} → €{current_price:{price_format}}\n"
+            f"   {trend_symbol} {change_percent:+.2f}%"
         )
         
         return formatted_display
@@ -1813,4 +1165,16 @@ Enhanced Financial Monitor Bot v2.0
             conn.commit()
             conn.close()
         except Exception as e:
-            logger.error(f
+            logger.error(f"Error recording report: {e}")
+    
+    def test_email_configuration(self):
+        """Test email configuration by sending a test message"""
+        try:
+            subject = "🧪 Enhanced Financial Monitor - Email Test"
+            message = """This is a test email from your Enhanced Financial Monitor Bot.
+
+If you receive this message, your email configuration is working correctly!
+
+✅ SMTP Server: Connected
+✅ Authentication: Successful  
+✅ Email Delivery: Working
