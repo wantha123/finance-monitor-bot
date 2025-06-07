@@ -6,6 +6,7 @@ Gère l'initialisation, la planification et l'exécution.
 
 import os
 import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import logging
 import schedule
 import time
