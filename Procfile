@@ -1,1 +1,1 @@
-worker: python main.py --mode test
+worker: python main.py
