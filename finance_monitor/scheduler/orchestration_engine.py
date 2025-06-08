@@ -1,7 +1,7 @@
 from apscheduler.schedulers.blocking import BlockingScheduler
 from datetime import datetime
 from storage.backblaze_backup import upload_file_to_b2
-from market_watch_bot.main import run_all_tasks
+from finance_monitor.main import run_all_tasks
 
 scheduler = BlockingScheduler()
 
