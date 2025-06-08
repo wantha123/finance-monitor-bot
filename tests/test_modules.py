@@ -1,8 +1,8 @@
 
 import pytest
-from modules.price_trend_analyzer.analyzer import calculate_moving_averages
-from modules.volatility_monitor.monitor import compute_atr
-from modules.orderbook_analyzer.analyzer import analyze_orderbook
+#from modules.price_trend_analyzer.analyzer import calculate_moving_averages
+#from modules.volatility_monitor.monitor import compute_atr
+#from modules.orderbook_analyzer.analyzer import analyze_orderbook
 from modules.google_trends_signal.trends import GoogleTrendsSignal
 from modules.strategy_engine.strategy import compute_strategy_score
 
