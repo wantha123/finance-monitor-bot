@@ -1,5 +1,5 @@
 
-from modules.google_trends_signal.trends import GoogleTrendsSignal
+from finance_monitor.modules.google_trends_signal.trends import GoogleTrendsSignal
 
 def test_google_score_range():
     signaler = GoogleTrendsSignal(["Bitcoin"])
