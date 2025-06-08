@@ -1,1 +1,0 @@
-# Placeholder pour architecture modulaire.
