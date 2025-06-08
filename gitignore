@@ -1,0 +1,38 @@
+
+# 📦 Python build
+__pycache__/
+*.py[cod]
+*.egg
+*.egg-info/
+dist/
+build/
+
+# 🧪 Environnement virtuel
+venv/
+.env
+.env.*
+.envrc
+
+# 📄 Données temporaires
+*.log
+logs/
+backups/
+*.db
+*.sqlite
+*.json
+*.csv
+
+# 🚀 Supabase local cache (si utilisé)
+.supabase/
+
+# 🧪 Tests et rapports
+.cache/
+coverage/
+htmlcov/
+pytest_cache/
+
+# 🧾 IDEs et systèmes
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
